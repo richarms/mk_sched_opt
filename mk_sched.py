@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from datetime import datetime, timedelta
 
 # Load approved observations
 df = pd.read_csv('data/Observations 2025 - 2025.observations.csv')
@@ -19,7 +20,7 @@ df['simulated_duration'] = df['simulated_duration'] / 3600
 df = df.sort_values(by='lst_start').reset_index(drop=True)
 
 schedule = []
-setup_time_hours = 10 / 60  # 10-minute setup time
+setup_time_hours = 15 / 60  # 15-minute setup time
 
 # Helper to check visibility constraints
 def fits_constraints(obs, start_time, duration):
@@ -44,17 +45,18 @@ def fits_constraints(obs, start_time, duration):
 
     return True
 
-# Schedule observations robustly with LST-day wrap-around
-def schedule_observations(unscheduled, max_days=120):
+# Schedule observations robustly with LST-day wrap-around and capture block IDs
+def schedule_observations(unscheduled, max_days=150):
     unscheduled = unscheduled.copy()
     day = 1
     current_LST = 0.0
+    script_start_datetime = datetime.utcnow()
 
     while not unscheduled.empty and day <= max_days:
         daily_schedule = []
         scheduled_today = set()
         if day % 10 == 0:
-          print(f"Scheduling day {day}")
+            print(f"Scheduling day {day}")
         daily_time_remaining = 24
 
         while daily_time_remaining > 0 and not unscheduled.empty:
@@ -69,9 +71,27 @@ def schedule_observations(unscheduled, max_days=120):
             obs = candidates.iloc[0]
             duration_to_schedule = min(obs['simulated_duration'], daily_time_remaining - setup_time_hours)
 
+            captureblock_datetime = script_start_datetime + timedelta(days=(day - 1), hours=current_LST)
+            captureblock_id = captureblock_datetime.strftime("%Y%m%d%H%M%S")
+
+            # Add DelayCal entry explicitly
             daily_schedule.append({
                 'Day': day,
-                'Observation_ID': obs['id'],
+                'CaptureBlock_ID': captureblock_id,
+                'SB_ID': 'DelayCal',
+                'Setup_Start_LST': current_LST,
+                'Observation_Start_LST': current_LST,
+                'Observation_End_LST': (current_LST + setup_time_hours) % 24,
+                'Band': obs['instrument_band'],
+                'Night_only': obs['night_obs'],
+                'Visibility_window': ''
+            })
+
+            # Add main observation entry
+            daily_schedule.append({
+                'Day': day,
+                'CaptureBlock_ID': captureblock_id,
+                'SB_ID': obs['id'],
                 'Setup_Start_LST': current_LST,
                 'Observation_Start_LST': (current_LST + setup_time_hours) % 24,
                 'Observation_End_LST': (current_LST + setup_time_hours + duration_to_schedule) % 24,
@@ -107,11 +127,11 @@ for _, row in schedule_df.iterrows():
     for hour in range(start_hour, end_hour):
         occupied_times[hour % 24] += 1
 
-least_occupied = np.argsort(occupied_times)[:6]  # Get 6 least-occupied hours
-print(f"Least-occupied LST hours: {least_occupied}")
+least_occupied = np.argsort(occupied_times)[:12]  # Get 12 least-occupied hours
+print(f"Least-occupied LST hours (ordered): {least_occupied}")
 
 # Output schedule CSV
-schedule_df.to_csv('MeerKAT_LST_Wraparound_Schedule.csv', index=False)
+schedule_df.to_csv('schedules/MeerKAT_LST_Wraparound_Schedule.csv', index=False)
 
-print("Schedule with setup time, LST wrap-around, and least-occupied LST report created successfully: MeerKAT_LST_Wraparound_Schedule.csv")
+print("Schedule with explicit DelayCal entries, setup time, LST wrap-around, capture block IDs, and least-occupied LST report created successfully: MeerKAT_LST_Wraparound_Schedule.csv")
 
