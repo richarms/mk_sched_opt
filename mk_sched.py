@@ -19,6 +19,7 @@ df['simulated_duration'] = df['simulated_duration'] / 3600
 df = df.sort_values(by='lst_start').reset_index(drop=True)
 
 schedule = []
+setup_time_hours = 10 / 60  # 10-minute setup time
 
 # Helper to check visibility constraints
 def fits_constraints(obs, start_time, duration):
@@ -44,7 +45,7 @@ def fits_constraints(obs, start_time, duration):
     return True
 
 # Schedule observations robustly with LST-day wrap-around
-def schedule_observations(unscheduled, max_days=90):
+def schedule_observations(unscheduled, max_days=120):
     unscheduled = unscheduled.copy()
     day = 1
     current_LST = 0.0
@@ -52,13 +53,13 @@ def schedule_observations(unscheduled, max_days=90):
     while not unscheduled.empty and day <= max_days:
         daily_schedule = []
         scheduled_today = set()
-        if day % 5 == 0:
-            print(f"Scheduling day {day}")
+        if day % 10 == 0:
+          print(f"Scheduling day {day}")
         daily_time_remaining = 24
 
         while daily_time_remaining > 0 and not unscheduled.empty:
             candidates = unscheduled[unscheduled.apply(
-                lambda obs: fits_constraints(obs, current_LST, obs['simulated_duration']), axis=1)]
+                lambda obs: fits_constraints(obs, (current_LST + setup_time_hours) % 24, obs['simulated_duration']), axis=1)]
 
             if candidates.empty:
                 current_LST = (current_LST + 0.1) % 24
@@ -66,20 +67,21 @@ def schedule_observations(unscheduled, max_days=90):
                 continue
 
             obs = candidates.iloc[0]
-            duration_to_schedule = min(obs['simulated_duration'], daily_time_remaining)
+            duration_to_schedule = min(obs['simulated_duration'], daily_time_remaining - setup_time_hours)
 
             daily_schedule.append({
                 'Day': day,
                 'Observation_ID': obs['id'],
-                'Start_LST': current_LST,
-                'End_LST': (current_LST + duration_to_schedule) % 24,
+                'Setup_Start_LST': current_LST,
+                'Observation_Start_LST': (current_LST + setup_time_hours) % 24,
+                'Observation_End_LST': (current_LST + setup_time_hours + duration_to_schedule) % 24,
                 'Band': obs['instrument_band'],
                 'Night_only': obs['night_obs'],
                 'Visibility_window': f"{obs['lst_start']:.2f}-{obs['lst_start_end']:.2f}"
             })
 
-            current_LST = (current_LST + duration_to_schedule) % 24
-            daily_time_remaining -= duration_to_schedule
+            current_LST = (current_LST + setup_time_hours + duration_to_schedule) % 24
+            daily_time_remaining -= (setup_time_hours + duration_to_schedule)
 
             if duration_to_schedule < obs['simulated_duration']:
                 unscheduled.at[obs.name, 'simulated_duration'] -= duration_to_schedule
@@ -97,8 +99,19 @@ schedule_observations(unscheduled)
 # Convert schedule to DataFrame
 schedule_df = pd.DataFrame(schedule)
 
-# Output schedule CSV
-schedule_df.to_csv('schedules/MeerKAT_LST_Wraparound_Schedule.csv', index=False)
+# Identify least-occupied LST ranges across all days
+occupied_times = np.zeros(24)
+for _, row in schedule_df.iterrows():
+    start_hour = int(row['Observation_Start_LST'])
+    end_hour = int(np.ceil(row['Observation_End_LST']))
+    for hour in range(start_hour, end_hour):
+        occupied_times[hour % 24] += 1
 
-print("Schedule with LST wrap-around created successfully: MeerKAT_LST_Wraparound_Schedule.csv")
+least_occupied = np.argsort(occupied_times)[:6]  # Get 6 least-occupied hours
+print(f"Least-occupied LST hours: {least_occupied}")
+
+# Output schedule CSV
+schedule_df.to_csv('MeerKAT_LST_Wraparound_Schedule.csv', index=False)
+
+print("Schedule with setup time, LST wrap-around, and least-occupied LST report created successfully: MeerKAT_LST_Wraparound_Schedule.csv")
 
