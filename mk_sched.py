@@ -6,6 +6,7 @@ import logging
 from astropy.time import Time
 from astropy.coordinates import EarthLocation, get_sun, AltAz
 import astropy.units as u
+import pprint
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -77,6 +78,8 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
     script_start_datetime = datetime.utcnow()
     no_schedule_days = 0
 
+    unscheduled_LST_hours = np.zeros(24)  # Track unscheduled hours explicitly
+
     while not unscheduled.empty and day <= max_days:
         daily_schedule = []
         scheduled_today = set()
@@ -99,6 +102,8 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
                     obs_durations.append((idx, duration_to_schedule))
 
             if not obs_durations:
+                unscheduled_hour = int(current_LST) % 24
+                unscheduled_LST_hours[unscheduled_hour] += 0.5
                 current_LST = (current_LST + 0.5) % 24
                 daily_time_remaining -= 0.5
                 continue
@@ -159,6 +164,22 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
     if not unscheduled.empty:
         logging.info("Unscheduled or unschedulable observations:")
         logging.info(unscheduled['id'].to_list())
+
+    # Report unscheduled hours explicitly
+    # logging.info("Unscheduled LST Hours Summary (Total hours unscheduled at each LST hour):")
+    # Create a dictionary with sorted values from a unscheduled list as keys, and original indices as values.
+    indexed_values = {}
+    print(f'Total number of unscheduled hours in LST 0-23 order: ')
+    for index, value in enumerate(unscheduled_LST_hours):
+        print(f'LST: {index}, total: {float(value)}')
+        indexed_values[index] = float(value)
+
+    sorted_dict =  {k: v for k, v in sorted(indexed_values.items(), key=lambda item: item[1], reverse=True)}
+    print(f'Least LST pressure: {sorted_dict.keys()}')
+
+    # for hour in range(24):
+    #     logging.info(f"LST Hour {hour:02d}:00 - {hour+1:02d}:00 => {unscheduled_LST_hours[hour]:.2f} hours unscheduled")
+
     return schedule
 
 schedule = schedule_observations(df, args.max_days, args.minimum_observation_duration, args.setup_time)
