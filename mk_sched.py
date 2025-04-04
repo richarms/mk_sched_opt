@@ -1,6 +1,18 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import argparse
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="MeerKAT Scheduling Script")
+parser.add_argument('--max_days', type=int, default=150, help='Maximum number of scheduling days')
+parser.add_argument('--minimum_observation_duration', type=float, default=0.5, help='Minimum observation duration in hours (default 0.5 = 30 min)')
+parser.add_argument('--setup_time', type=float, default=0.25, help='Setup time in hours (default 0.25 = 15 min)')
+args = parser.parse_args()
 
 # Load approved observations
 df = pd.read_csv('data/Observations 2025 - 2025.observations.csv')
@@ -15,10 +27,6 @@ df['lst_start_end'] = df['lst_start_end'].apply(lst_to_hours)
 
 # Convert simulated_duration from seconds to hours
 df['simulated_duration'] = df['simulated_duration'] / 3600
-
-schedule = []
-setup_time_hours = 15 / 60  # 15-minute setup time
-minimum_observation_duration_hours = 30 / 60  # 30-minute minimum duration
 
 # Helper to check visibility constraints
 def fits_constraints(obs, start_time, duration):
@@ -44,8 +52,9 @@ def fits_constraints(obs, start_time, duration):
     return True
 
 # Schedule observations greedily maximizing observation length
-def schedule_observations(unscheduled, max_days=150):
+def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
     unscheduled = unscheduled.copy()
+    schedule = []
     day = 1
     current_LST = 0.0
     script_start_datetime = datetime.utcnow()
@@ -57,17 +66,17 @@ def schedule_observations(unscheduled, max_days=150):
         daily_time_remaining = 24
         daily_scheduled_duration = 0
 
-        while daily_time_remaining > setup_time_hours and not unscheduled.empty:
+        while daily_time_remaining > setup_time and not unscheduled.empty:
             obs_durations = []
 
             for idx, obs in unscheduled.iterrows():
-                available_duration = daily_time_remaining - setup_time_hours
+                available_duration = daily_time_remaining - setup_time
                 duration_to_schedule = min(obs['simulated_duration'], available_duration)
 
-                if duration_to_schedule < minimum_observation_duration_hours:
+                if duration_to_schedule < min_obs_duration:
                     continue
 
-                if fits_constraints(obs, (current_LST + setup_time_hours) % 24, duration_to_schedule):
+                if fits_constraints(obs, (current_LST + setup_time) % 24, duration_to_schedule):
                     obs_durations.append((idx, duration_to_schedule))
 
             if not obs_durations:
@@ -88,11 +97,11 @@ def schedule_observations(unscheduled, max_days=150):
                 'SB_ID': 'DelayCal',
                 'Setup_Start_LST': current_LST,
                 'Observation_Start_LST': current_LST,
-                'Observation_End_LST': (current_LST + setup_time_hours) % 24,
+                'Observation_End_LST': (current_LST + setup_time) % 24,
                 'Band': obs['instrument_band'],
                 'Night_only': obs['night_obs'],
                 'Visibility_window': '',
-                'Duration_hrs': setup_time_hours
+                'Duration_hrs': setup_time
             })
 
             # Add main observation entry
@@ -101,16 +110,16 @@ def schedule_observations(unscheduled, max_days=150):
                 'CaptureBlock_ID': captureblock_id,
                 'SB_ID': obs['id'],
                 'Setup_Start_LST': current_LST,
-                'Observation_Start_LST': (current_LST + setup_time_hours) % 24,
-                'Observation_End_LST': (current_LST + setup_time_hours + duration_to_schedule) % 24,
+                'Observation_Start_LST': (current_LST + setup_time) % 24,
+                'Observation_End_LST': (current_LST + setup_time + duration_to_schedule) % 24,
                 'Band': obs['instrument_band'],
                 'Night_only': obs['night_obs'],
                 'Visibility_window': f"{obs['lst_start']:.2f}-{obs['lst_start_end']:.2f}",
                 'Duration_hrs': duration_to_schedule
             })
 
-            current_LST = (current_LST + setup_time_hours + duration_to_schedule) % 24
-            daily_time_remaining -= (setup_time_hours + duration_to_schedule)
+            current_LST = (current_LST + setup_time + duration_to_schedule) % 24
+            daily_time_remaining -= (setup_time + duration_to_schedule)
             daily_scheduled_duration += duration_to_schedule
 
             if duration_to_schedule < obs['simulated_duration']:
@@ -125,27 +134,22 @@ def schedule_observations(unscheduled, max_days=150):
             no_schedule_days = 0
 
         if no_schedule_days >= 3:
-            print(f"Exiting after {no_schedule_days} consecutive days without scheduling.")
+            logging.info(f"Exiting after {no_schedule_days} consecutive days without scheduling.")
             break
 
         unscheduled = unscheduled.drop(list(scheduled_today))
         schedule.extend(daily_schedule)
         day += 1
         if day % 10 == 0:
-          print(f'Scheduling day: {day}')
+            logging.info(f'Scheduling day: {day}')
 
     if not unscheduled.empty:
-        print("Unscheduled or unschedulable observations:")
-        print(unscheduled['id'].to_list())
+        logging.warning("Unscheduled observations remain: %s", unscheduled['id'].tolist())
 
-unscheduled = df.copy()
-schedule_observations(unscheduled)
+    return schedule
 
-# Convert schedule to DataFrame
+schedule = schedule_observations(df, args.max_days, args.minimum_observation_duration, args.setup_time)
 schedule_df = pd.DataFrame(schedule)
-
-# Output schedule CSV
 schedule_df.to_csv('schedules/MeerKAT_Greedy_Schedule.csv', index=False)
-
-print("Greedy schedule created successfully: MeerKAT_Greedy_Schedule.csv")
+logging.info("Schedule created successfully: schedules/MeerKAT_Greedy_Schedule.csv")
 
