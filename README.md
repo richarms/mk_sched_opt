@@ -1,6 +1,6 @@
 # MeerKAT Scheduler
 
-A greedy scheduler built for the MeerKAT radio telescope. It optimizes telescope usage by greedily maximizing the length of scheduled observations within specified constraints, including visibility windows, minimum observation durations, configuration time (i.e. DleayCal), and day/night and sunrise/sunset constraints.
+A greedy scheduler built for the MeerKAT radio telescope. It optimizes telescope usage by greedily maximizing the length of scheduled observations within specified constraints, including visibility windows, minimum observation durations, configuration time (i.e. DelayCal), and day/night and sunrise/sunset constraints.
 
 ## Notes
 
@@ -46,9 +46,9 @@ python mk_sched.py \
 - `--minimum_observation_duration`: Minimum duration of observations in hours (default: 0.5 hours / 30 min)
 - `--setup_time`: Setup time required before each observation in hours (default: 0.25 hours / 15 min)
 
-## Data Input
+## Input
 
-A CSV file containing data from approved SBs with the following input columns:
+A CSV file containing data from approved SBs (typically downloaded from the OPT) with the following input columns:
 - `id`
 - `lst_start`
 - `lst_start_end`
@@ -59,7 +59,7 @@ A CSV file containing data from approved SBs with the following input columns:
 
 ## Output
 
-Generates a CSV file in ```schedules/```
+Writes a CSV file to ```schedules/```
 
 ### Output Columns
 
