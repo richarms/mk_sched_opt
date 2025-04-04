@@ -3,6 +3,9 @@ import numpy as np
 from datetime import datetime, timedelta
 import argparse
 import logging
+from astropy.time import Time
+from astropy.coordinates import EarthLocation, get_sun, AltAz
+import astropy.units as u
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -10,9 +13,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="MeerKAT Scheduling Script")
 parser.add_argument('--max_days', type=int, default=150, help='Maximum number of scheduling days')
+parser.add_argument('--max_no_schedule_days', type=int, default=3, help='Exit scheduler after this many days without any observations')
 parser.add_argument('--minimum_observation_duration', type=float, default=0.5, help='Minimum observation duration in hours (default 0.5 = 30 min)')
 parser.add_argument('--setup_time', type=float, default=0.25, help='Setup time in hours (default 0.25 = 15 min)')
 args = parser.parse_args()
+
+# MeerKAT location
+meerkat_location = EarthLocation(lat=-30.7130*u.deg, lon=21.4430*u.deg, height=1038*u.m)
 
 # Load approved observations
 df = pd.read_csv('data/Observations 2025 - 2025.observations.csv')
@@ -28,8 +35,19 @@ df['lst_start_end'] = df['lst_start_end'].apply(lst_to_hours)
 # Convert simulated_duration from seconds to hours
 df['simulated_duration'] = df['simulated_duration'] / 3600
 
+# Calculate sunrise and sunset LST hours
+def get_sunrise_sunset_lst(obs_date):
+    midnight = Time(obs_date) + timedelta(days=0.5)
+    delta_midnight = np.linspace(-12, 12, 1000)*u.hour
+    times = midnight + delta_midnight
+    frame = AltAz(obstime=times, location=meerkat_location)
+    sun_altazs = get_sun(times).transform_to(frame)
+    sunrise_time = times[np.argmin(np.abs(sun_altazs.alt - (-0.833*u.deg)))]
+    sunset_time = times[np.argmin(np.abs(sun_altazs.alt - (-0.833*u.deg)))]
+    return sunrise_time.sidereal_time('apparent', meerkat_location).hour, sunset_time.sidereal_time('apparent', meerkat_location).hour
+
 # Helper to check visibility constraints
-def fits_constraints(obs, start_time, duration):
+def fits_constraints(obs, start_time, duration, sunrise, sunset):
     end_time = (start_time + duration) % 24
     min_lst, max_lst = obs['lst_start'], obs['lst_start_end']
     if min_lst < max_lst:
@@ -45,7 +63,6 @@ def fits_constraints(obs, start_time, duration):
             return False
 
     if obs['avoid_sunrise_sunset'] == 'Yes':
-        sunrise, sunset = 6, 18
         if (start_time < sunrise < end_time) or (start_time < sunset < end_time):
             return False
 
@@ -66,6 +83,8 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
         daily_time_remaining = 24
         daily_scheduled_duration = 0
 
+        sunrise, sunset = get_sunrise_sunset_lst(script_start_datetime + timedelta(days=day - 1))
+
         while daily_time_remaining > setup_time and not unscheduled.empty:
             obs_durations = []
 
@@ -76,7 +95,7 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
                 if duration_to_schedule < min_obs_duration:
                     continue
 
-                if fits_constraints(obs, (current_LST + setup_time) % 24, duration_to_schedule):
+                if fits_constraints(obs, (current_LST + setup_time) % 24, duration_to_schedule, sunrise, sunset):
                     obs_durations.append((idx, duration_to_schedule))
 
             if not obs_durations:
@@ -90,7 +109,6 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
             captureblock_datetime = script_start_datetime + timedelta(days=(day - 1), hours=current_LST)
             captureblock_id = captureblock_datetime.strftime("%Y%m%d%H%M%S")
 
-            # Add DelayCal entry explicitly
             daily_schedule.append({
                 'Day': day,
                 'CaptureBlock_ID': captureblock_id,
@@ -104,7 +122,6 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
                 'Duration_hrs': setup_time
             })
 
-            # Add main observation entry
             daily_schedule.append({
                 'Day': day,
                 'CaptureBlock_ID': captureblock_id,
@@ -122,18 +139,14 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
             daily_time_remaining -= (setup_time + duration_to_schedule)
             daily_scheduled_duration += duration_to_schedule
 
-            if duration_to_schedule < obs['simulated_duration']:
-                unscheduled.at[idx, 'simulated_duration'] -= duration_to_schedule
-                unscheduled.at[idx, 'lst_start'] = current_LST
-            else:
-                scheduled_today.add(idx)
+            scheduled_today.add(idx)
 
         if daily_scheduled_duration == 0:
             no_schedule_days += 1
         else:
             no_schedule_days = 0
 
-        if no_schedule_days >= 3:
+        if no_schedule_days >= args.max_no_schedule_days:
             logging.info(f"Exiting after {no_schedule_days} consecutive days without scheduling.")
             break
 
@@ -144,8 +157,8 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
             logging.info(f'Scheduling day: {day}')
 
     if not unscheduled.empty:
-        logging.warning("Unscheduled observations remain: %s", unscheduled['id'].tolist())
-
+        logging.info("Unscheduled or unschedulable observations:")
+        logging.info(unscheduled['id'].to_list())
     return schedule
 
 schedule = schedule_observations(df, args.max_days, args.minimum_observation_duration, args.setup_time)
