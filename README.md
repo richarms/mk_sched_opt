@@ -12,6 +12,41 @@ A greedy scheduler built for the MeerKAT radio telescope. It optimizes telescope
   - Night-only observations 
   - Sunrise/sunset avoidance
 
+                 ┌─────────────────────────────────────────┐
+                 │ MeerKAT Long-Term Scheduler Simulator   │
+                 └───────────┬──────────────────┬──────────┘
+                             │                  │
+           ┌─────────────────▼──────┐   ┌───────▼─────────────────┐
+           │       INPUTS           │   │     CONSTRAINTS         │
+           ├────────────────────────┤   ├─────────────────────────┤
+           │ ● Observation Requests │   │ ● Visibility Windows    │
+           │   - ID, duration       │   │ ● Night-only Constraint │
+           │   - Instrument/band    │   │ ● Sunrise/Sunset Avoid. │
+           │   - Priority, tags     │   │ ● Minimum Observation   │
+           │ ● Scheduling Settings  │   │   Length                │
+           │   - Max scheduling days│   │ ● Setup/Calibration Time│
+           └────────────────────────┘   └─────────────────────────┘
+                             │                 │
+                             └─────────┬───────┘
+                                       │
+                          ┌────────────▼───────────┐
+                          │      Scheduler         │
+                          │   Optimization Loop    │
+                          └────────────┬───────────┘
+                                       │
+                ┌──────────────────────▼───────────────────┐
+                │                OUTPUTS                   │
+                ├──────────────────────────────────────────┤
+                │ ● Optimized Schedule CSV                 │
+                │ ● Scheduled observation timelines        │
+                │ ● Explicit DelayCal entries              │
+                │ ● CaptureBlock IDs & Metadata            │
+                │ ● Report of unscheduled observations     │
+                │ ● Least-utilized LST hours               │
+                └──────────────────────────────────────────┘
+
+
+
 ## Installation
 
 Clone the repository and install requirements:
