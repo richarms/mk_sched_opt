@@ -8,10 +8,8 @@ from astropy.coordinates import EarthLocation, get_sun, AltAz
 import astropy.units as u
 import pprint
 
-# Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Parse command-line arguments
 parser = argparse.ArgumentParser(description="MeerKAT Scheduling Script")
 parser.add_argument('--max_days', type=int, default=150, help='Maximum number of scheduling days')
 parser.add_argument('--max_no_schedule_days', type=int, default=3, help='Exit scheduler after this many days without any observations')
@@ -19,10 +17,10 @@ parser.add_argument('--minimum_observation_duration', type=float, default=0.5, h
 parser.add_argument('--setup_time', type=float, default=0.25, help='Setup time in hours (default 0.25 = 15 min)')
 args = parser.parse_args()
 
-# MeerKAT location
+# MeerKAT location??
 meerkat_location = EarthLocation(lat=-30.7130*u.deg, lon=21.4430*u.deg, height=1038*u.m)
 
-# Load approved observations
+# Load approved SBs
 df = pd.read_csv('data/Observations 2025 - 2025.observations.csv')
 
 # Convert LST strings to float (hours)
@@ -70,6 +68,7 @@ def fits_constraints(obs, start_time, duration, sunrise, sunset):
     return True
 
 # Schedule observations greedily maximizing observation length
+# TODO: don't leave a negligible amount of time (i.e. less than the min observation length) in the SB, rather wait to schedule it all
 def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
     unscheduled = unscheduled.copy()
     schedule = []
@@ -77,8 +76,9 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
     current_LST = 0.0
     script_start_datetime = datetime.utcnow()
     no_schedule_days = 0
-
-    unscheduled_LST_hours = np.zeros(24)  # Track unscheduled hours explicitly
+    
+    # Track unscheduled hours explicitly
+    unscheduled_LST_hours = np.zeros(24)  
 
     while not unscheduled.empty and day <= max_days:
         daily_schedule = []
@@ -101,6 +101,7 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
                 if fits_constraints(obs, (current_LST + setup_time) % 24, duration_to_schedule, sunrise, sunset):
                     obs_durations.append((idx, duration_to_schedule))
 
+            # Record unscheduled time
             if not obs_durations:
                 unscheduled_hour = int(current_LST) % 24
                 unscheduled_LST_hours[unscheduled_hour] += 0.5
@@ -146,11 +147,14 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
 
             scheduled_today.add(idx)
 
+        # Record how many consecutive days on which nothing has been added to the schedule.
+        # i.e. Days without Injury (to the schedule): 
         if daily_scheduled_duration == 0:
             no_schedule_days += 1
         else:
             no_schedule_days = 0
 
+        # exit the loop if there are no items scheduled for `args.max_no_schedule_days` days
         if no_schedule_days >= args.max_no_schedule_days:
             logging.info(f"Exiting after {no_schedule_days} consecutive days without scheduling.")
             break
@@ -166,10 +170,10 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
         logging.info(unscheduled['id'].to_list())
 
     # Report unscheduled hours explicitly
-    # logging.info("Unscheduled LST Hours Summary (Total hours unscheduled at each LST hour):")
+    print(f'Total number of unscheduled hours in LST 0-23 order: ')
+    
     # Create a dictionary with sorted values from a unscheduled list as keys, and original indices as values.
     indexed_values = {}
-    print(f'Total number of unscheduled hours in LST 0-23 order: ')
     for index, value in enumerate(unscheduled_LST_hours):
         print(f'LST: {index}, total: {float(value)}')
         indexed_values[index] = float(value)
@@ -177,13 +181,10 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
     sorted_dict =  {k: v for k, v in sorted(indexed_values.items(), key=lambda item: item[1], reverse=True)}
     print(f'Least LST pressure: {sorted_dict.keys()}')
 
-    # for hour in range(24):
-    #     logging.info(f"LST Hour {hour:02d}:00 - {hour+1:02d}:00 => {unscheduled_LST_hours[hour]:.2f} hours unscheduled")
-
     return schedule
 
 schedule = schedule_observations(df, args.max_days, args.minimum_observation_duration, args.setup_time)
 schedule_df = pd.DataFrame(schedule)
-schedule_df.to_csv('schedules/MeerKAT_Greedy_Schedule.csv', index=False)
-logging.info("Schedule created successfully: schedules/MeerKAT_Greedy_Schedule.csv")
+schedule_df.to_csv('schedules/MeerKAT_Schedule.csv', index=False)
+logging.info("Schedule created successfully: schedules/MeerKAT_Schedule.csv")
 
