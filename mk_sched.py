@@ -4,9 +4,8 @@ from datetime import datetime, timedelta
 import argparse
 import logging
 from astropy.time import Time
-from astropy.coordinates import EarthLocation, get_sun, AltAz
+from astropy.coordinates import AltAz, Angle, EarthLocation, get_sun
 import astropy.units as u
-import pprint
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -15,6 +14,7 @@ parser.add_argument('--max_days', type=int, default=150, help='Maximum number of
 parser.add_argument('--max_no_schedule_days', type=int, default=3, help='Exit scheduler after this many days without any observations')
 parser.add_argument('--minimum_observation_duration', type=float, default=0.5, help='Minimum observation duration in hours (default 0.5 = 30 min)')
 parser.add_argument('--setup_time', type=float, default=0.25, help='Setup time in hours (default 0.25 = 15 min)')
+parser.add_argument('--outfile', type=str, default='schedules/MeerKAT_Schedule.csv', help='Output filename')
 args = parser.parse_args()
 
 # MeerKAT location??
@@ -45,6 +45,19 @@ def get_sunrise_sunset_lst(obs_date):
     sunset_time = times[np.argmin(np.abs(sun_altazs.alt - (-0.833*u.deg)))]
     return sunrise_time.sidereal_time('apparent', meerkat_location).hour, sunset_time.sidereal_time('apparent', meerkat_location).hour
 
+def next_lst_zero(location: EarthLocation, from_time: Time = None) -> Time:
+    # Calculate the next UTC time when local sidereal time (LST) will be 0h at the given EarthLocation.
+    if from_time is None:
+        from_time = Time(datetime.utcnow())
+
+    current_lst = from_time.sidereal_time('apparent', longitude=location.lon)
+    delta_lst = (Angle(24 * u.hourangle) - current_lst).wrap_at(24 * u.hourangle)
+
+    sidereal_day = 23.9344696 * u.hour
+    delta_utc = delta_lst.hour / 24.0 * sidereal_day
+
+    return from_time + delta_utc
+
 # Helper to check visibility constraints
 def fits_constraints(obs, start_time, duration, sunrise, sunset):
     end_time = (start_time + duration) % 24
@@ -73,7 +86,7 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
     schedule = []
     day = 1
     current_LST = 0.0
-    script_start_datetime = datetime.utcnow()
+    script_start_datetime = next_lst_zero(location = meerkat_location).to_datetime()
     no_schedule_days = 0
 
     # Track unschedulable hours
@@ -123,16 +136,16 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
             captureblock_datetime = script_start_datetime + timedelta(days=(day - 1), hours=current_LST)
             captureblock_id = captureblock_datetime.strftime("%Y%m%d%H%M%S")
 
-            # DelayCal Entry
+            # Build + DelayCal Entry
             daily_schedule.append({
                 'Day': day,
-                'CaptureBlock_ID': captureblock_id,
+                'UTC': captureblock_datetime.isoformat(),
                 'SB_ID': 'DelayCal',
                 'Setup_Start_LST': current_LST,
                 'Observation_Start_LST': current_LST,
                 'Observation_End_LST': (current_LST + setup_time) % 24,
                 'Band': obs['instrument_band'],
-                'Night_only': obs['night_obs'],
+                'Night_only': 'n/a',
                 'Visibility_window': '',
                 'Duration_hrs': setup_time
             })
@@ -140,7 +153,7 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
             # Observation Entry
             daily_schedule.append({
                 'Day': day,
-                'CaptureBlock_ID': captureblock_id,
+                'UTC': (captureblock_datetime + timedelta(hours=setup_time)).isoformat(),
                 'SB_ID': obs['id'],
                 'Setup_Start_LST': current_LST,
                 'Observation_Start_LST': (current_LST + setup_time) % 24,
@@ -167,7 +180,7 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
             no_schedule_days += 1
         else:
             no_schedule_days = 0
-            
+
         # exit the loop if there are no items scheduled for `args.max_no_schedule_days` days
         if no_schedule_days >= args.max_no_schedule_days:
             logging.info(f"Exiting after {no_schedule_days} consecutive days without scheduling.")
@@ -186,13 +199,11 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
         for _, obs in unscheduled.iterrows():
             print(f"SB {obs['id']} has {obs['simulated_duration']:.2f} hrs unscheduled.")
             total_unscheduled += obs['simulated_duration']
-    logging.info(f"Total unscheduled time: {total_unscheduled} hours.")
     
     # Report unscheduled hours explicitly
     print(f'Total number of unscheduled hours in LST 0-23 order: ')
-    
-    # Create a dictionary with sorted values from a unscheduled list as keys, and original indices as values.
     indexed_values = {}
+    # Create a dictionary with sorted values from a unscheduled list as keys, and original indices as values.
     for index, value in enumerate(unscheduled_LST_hours):
         print(f'LST: {index}, total: {float(value)}')
         indexed_values[index] = float(value)
@@ -204,6 +215,5 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
 
 schedule = schedule_observations(df, args.max_days, args.minimum_observation_duration, args.setup_time)
 schedule_df = pd.DataFrame(schedule)
-schedule_df.to_csv('schedules/MeerKAT_Schedule.csv', index=False)
-print("Schedule created successfully: schedules/MeerKAT_Schedule.csv")
-
+schedule_df.to_csv(args.outfile, index=False)
+print(f'Schedule created successfully: {args.outfile}')
