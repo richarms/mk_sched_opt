@@ -139,9 +139,10 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
             # Build + DelayCal Entry
             daily_schedule.append({
                 'Day': day,
+                'ID': 'DelayCal',
+                'Proposal ID': obs['proposal_id'],
+                'Description': 'Build and DelayCal',
                 'UTC': captureblock_datetime.isoformat(),
-                'SB_ID': 'DelayCal',
-                'Setup_Start_LST': current_LST,
                 'Observation_Start_LST': current_LST,
                 'Observation_End_LST': (current_LST + setup_time) % 24,
                 'Band': obs['instrument_band'],
@@ -153,9 +154,10 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
             # Observation Entry
             daily_schedule.append({
                 'Day': day,
+                'ID': obs['id'],
+                'Proposal ID': obs['proposal_id'],
+                'Description': obs['description'],
                 'UTC': (captureblock_datetime + timedelta(hours=setup_time)).isoformat(),
-                'SB_ID': obs['id'],
-                'Setup_Start_LST': current_LST,
                 'Observation_Start_LST': (current_LST + setup_time) % 24,
                 'Observation_End_LST': (current_LST + setup_time + duration_to_schedule) % 24,
                 'Band': obs['instrument_band'],
