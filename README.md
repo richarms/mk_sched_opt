@@ -1,6 +1,6 @@
 # MeerKAT Scheduler
 
-A greedy scheduler built for the MeerKAT radio telescope. It optimizes telescope usage by greedily maximizing the length of scheduled observations within specified constraints, including visibility windows, minimum observation durations, configuration time (i.e. DelayCal), and day/night and sunrise/sunset constraints.
+A greedy scheduler built for the MeerKAT radio telescope. It optimizes telescope usage by greedily maximizing the length of scheduled observations within specified constraints, including visibility windows, minimum observation durations, configuration time (i.e. build + DelayCal), and day/night and sunrise/sunset constraints.
 
 ## Notes
 
@@ -8,44 +8,9 @@ A greedy scheduler built for the MeerKAT radio telescope. It optimizes telescope
 - **Sunrise/Sunset** Computes sunrise and sunset times in Local Sidereal Time (LST) using Astropy.
 - **Current Constraints:**
   - Minimum observation duration
-  - Telescope setup time (i.e. Delay calibration)
+  - Telescope setup time (i.e. build + delay calibration)
   - Night-only observations 
   - Sunrise/sunset avoidance
-
-                 ┌─────────────────────────────────────────┐
-                 │ MeerKAT Long-Term Scheduler Simulator   │
-                 └───────────┬──────────────────┬──────────┘
-                             │                  │
-           ┌─────────────────▼──────┐   ┌───────▼─────────────────┐
-           │       INPUTS           │   │     CONSTRAINTS         │
-           ├────────────────────────┤   ├─────────────────────────┤
-           │ ● Observation Requests │   │ ● Visibility Windows    │
-           │   - ID, duration       │   │ ● Night-only Constraint │
-           │   - Instrument/band    │   │ ● Sunrise/Sunset Avoid. │
-           │   - Priority, tags     │   │ ● Minimum Observation   │
-           │ ● Scheduling Settings  │   │   Length                │
-           │   - Max scheduling days│   │ ● Setup/Calibration Time│
-           └────────────────────────┘   └─────────────────────────┘
-                             │                 │
-                             └─────────┬───────┘
-                                       │
-                          ┌────────────▼───────────┐
-                          │      Scheduler         │
-                          │   Optimization Loop    │
-                          └────────────┬───────────┘
-                                       │
-                ┌──────────────────────▼───────────────────┐
-                │                OUTPUTS                   │
-                ├──────────────────────────────────────────┤
-                │ ● Optimized Schedule CSV                 │
-                │ ● Scheduled observation timelines        │
-                │ ● Explicit DelayCal entries              │
-                │ ● CaptureBlock IDs & Metadata            │
-                │ ● Report of unscheduled observations     │
-                │ ● Least-utilized LST hours               │
-                └──────────────────────────────────────────┘
-
-
 
 ## Installation
 
