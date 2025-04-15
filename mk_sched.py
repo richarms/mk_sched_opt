@@ -15,6 +15,7 @@ parser.add_argument('--max_no_schedule_days', type=int, default=3, help='Exit sc
 parser.add_argument('--minimum_observation_duration', type=float, default=0.5, help='Minimum observation duration in hours (default 0.5 = 30 min)')
 parser.add_argument('--setup_time', type=float, default=0.25, help='Setup time in hours (default 0.25 = 15 min)')
 parser.add_argument('--outfile', type=str, default='schedules/MeerKAT_Schedule.csv', help='Output filename')
+parser.add_argument('--avoid_weds', type=bool, default=True)
 args = parser.parse_args()
 
 # MeerKAT location??
@@ -77,6 +78,11 @@ def fits_constraints(obs, start_time, duration, sunrise, sunset):
     if obs['avoid_sunrise_sunset'] == 'Yes':
         if (start_time < sunrise < end_time) or (start_time < sunset < end_time):
             return False
+    
+    if args.avoid_weds:
+        pass
+        # if start_time.weekday() == 2 and 6 <= start_time.hour < 13:
+        #     return False
 
     return True
 
@@ -106,6 +112,12 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
             for idx, obs in unscheduled.iterrows():
                 total_time_required = obs['simulated_duration'] + setup_time
                 available_duration = daily_time_remaining
+
+                # check Wednesday engineering time
+                #if args.avoid_weds:
+                captureblock_datetime = script_start_datetime + timedelta(days=(day - 1), hours=current_LST)
+                if captureblock_datetime.weekday() == 2 and 6 <= captureblock_datetime.hour < 13:
+                    continue
 
                 # Check constraints explicitly
                 if not fits_constraints(obs, (current_LST + setup_time) % 24, 
