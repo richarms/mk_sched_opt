@@ -14,8 +14,6 @@ A greedy scheduler built for the MeerKAT radio telescope. It optimizes telescope
 
 ## Installation
 
-Clone the repository and install requirements:
-
 ```sh
 git clone https://github.com/richarms/mk_sched_opt.git
 cd mk_sched_opt
@@ -73,12 +71,4 @@ Writes a CSV file to ```schedules/```
 - `Night_only`: Indicates if night observation is required
 - `Visibility_window`: Allowed LST visibility window
 - `Duration_hrs`: Duration of each scheduled segment in hours
-
-## License
-
-MIT License
-
----
-
-**Contact:** Richard Armstrong richarms@sarao.ac.za
 
