@@ -16,24 +16,12 @@ parser.add_argument('--minimum_observation_duration', type=float, default=0.5, h
 parser.add_argument('--setup_time', type=float, default=0.25, help='Setup time in hours (default 0.25 = 15 min)')
 parser.add_argument('--outfile', type=str, default='schedules/MeerKAT_Schedule.csv', help='Output filename')
 parser.add_argument('--avoid_weds', type=bool, default=True)
-args = parser.parse_args()
-
-# MeerKAT location??
-meerkat_location = EarthLocation(lat=-30.7130*u.deg, lon=21.4430*u.deg, height=1038*u.m)
-
-# Load approved SBs
-df = pd.read_csv('data/Observations 2025 - 2025.observations.csv')
+# args = parser.parse_args() # Moved to main block
 
 # Convert LST strings to float (hours)
 def lst_to_hours(lst_str):
     h, m = map(int, lst_str.split(':'))
     return h + m / 60
-
-df['lst_start'] = df['lst_start'].apply(lst_to_hours)
-df['lst_start_end'] = df['lst_start_end'].apply(lst_to_hours)
-
-# Convert simulated_duration from seconds to hours
-df['simulated_duration'] = df['simulated_duration'] / 3600
 
 # Calculate sunrise and sunset LST hours
 def get_sunrise_sunset_lst(obs_date):
@@ -86,133 +74,160 @@ def fits_constraints(obs, start_time, duration, sunrise, sunset):
 
     return True
 
-# Schedule observations greedily maximizing observation length
-def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
-    unscheduled = unscheduled.copy()
-    schedule = []
-    day = 1
-    current_LST = 0.0
-    script_start_datetime = next_lst_zero(location = meerkat_location).to_datetime()
-    no_schedule_days = 0
-
-    # Track unschedulable hours
+def schedule_observations(unscheduled_df, max_days, min_obs_duration, setup_time):
+    unscheduled = unscheduled_df.copy()
+    scheduled_observations = []
+    script_start_datetime = next_lst_zero(location=meerkat_location).to_datetime()
+    
     unscheduled_LST_hours = np.zeros(24)
-
-    while not unscheduled.empty and day <= max_days:
-        daily_schedule = []
-        scheduled_today = set()
-        daily_time_remaining = 24
-        daily_scheduled_duration = 0
-        sunrise, sunset = get_sunrise_sunset_lst(script_start_datetime + timedelta(days=day - 1))
-
-        while daily_time_remaining > setup_time and not unscheduled.empty:
-            fully_schedulable = []
-            partially_schedulable = []
-
-            for idx, obs in unscheduled.iterrows():
-                total_time_required = obs['simulated_duration'] + setup_time
-                available_duration = daily_time_remaining
-
-                # check Wednesday engineering time
-                #if args.avoid_weds:
-                captureblock_datetime = script_start_datetime + timedelta(days=(day - 1), hours=current_LST)
-                if captureblock_datetime.weekday() == 2 and 6 <= captureblock_datetime.hour < 13:
-                    continue
-
-                # Check constraints explicitly
-                if not fits_constraints(obs, (current_LST + setup_time) % 24, 
-                                        min(obs['simulated_duration'], available_duration - setup_time), sunrise, sunset):
-                    continue
-
-                if total_time_required <= available_duration and obs['simulated_duration'] >= min_obs_duration:
-                    fully_schedulable.append((idx, obs['simulated_duration']))
-                elif (available_duration - setup_time) >= min_obs_duration:
-                    partially_schedulable.append((idx, available_duration - setup_time))
-
-            if fully_schedulable:
-                # Prioritize observation that maximizes telescope time usage
-                idx, duration_to_schedule = max(fully_schedulable, key=lambda x: x[1])
-            elif partially_schedulable:
-                # Choose the largest possible partial duration
-                idx, duration_to_schedule = max(partially_schedulable, key=lambda x: x[1])
-            else:
-                # Explicitly track unscheduled LST hours
-                unscheduled_hour = int(current_LST) % 24
-                unscheduled_LST_hours[unscheduled_hour] += 0.5
-                current_LST = (current_LST + 0.5) % 24
-                daily_time_remaining -= 0.5
-                continue
-
-            obs = unscheduled.loc[idx]
-
-            captureblock_datetime = script_start_datetime + timedelta(days=(day - 1), hours=current_LST)
-            captureblock_id = captureblock_datetime.strftime("%Y%m%d%H%M%S")
-
-            # Build + DelayCal Entry
-            daily_schedule.append({
-                'Day': day,
-                'ID': 'DelayCal',
-                'Proposal ID': obs['proposal_id'],
-                'Description': 'Build and DelayCal',
-                'UTC': captureblock_datetime.isoformat(),
-                'Observation_Start_LST': current_LST,
-                'Observation_End_LST': (current_LST + setup_time) % 24,
-                'Band': obs['instrument_band'],
-                'Night_only': 'n/a',
-                'Visibility_window': '',
-                'Duration_hrs': setup_time
-            })
-
-            # Observation Entry
-            daily_schedule.append({
-                'Day': day,
-                'ID': obs['id'],
-                'Proposal ID': obs['proposal_id'],
-                'Description': obs['description'],
-                'UTC': (captureblock_datetime + timedelta(hours=setup_time)).isoformat(),
-                'Observation_Start_LST': (current_LST + setup_time) % 24,
-                'Observation_End_LST': (current_LST + setup_time + duration_to_schedule) % 24,
-                'Band': obs['instrument_band'],
-                'Night_only': obs['night_obs'],
-                'Visibility_window': f"{obs['lst_start']:.2f}-{obs['lst_start_end']:.2f}",
-                'Duration_hrs': duration_to_schedule
-            })
-
-            current_LST = (current_LST + setup_time + duration_to_schedule) % 24
-            daily_time_remaining -= (setup_time + duration_to_schedule)
-            daily_scheduled_duration += duration_to_schedule
-
-            # Explicitly update or remove observation
-            if duration_to_schedule < obs['simulated_duration']:
-                unscheduled.at[idx, 'simulated_duration'] -= duration_to_schedule
-            else:
-                scheduled_today.add(idx)
-
-        # Record how many consecutive days on which nothing has been added to the schedule.
-        # i.e. Days without Injury (to the schedule): 
+    no_schedule_days = 0
+    
+    for day in range(1, max_days + 1):
+        daily_schedule, daily_scheduled_duration = schedule_day(
+            unscheduled,
+            day,
+            script_start_datetime,
+            setup_time,
+            min_obs_duration,
+            unscheduled_LST_hours
+        )
+        
         if daily_scheduled_duration == 0:
             no_schedule_days += 1
         else:
             no_schedule_days = 0
-
-        # exit the loop if there are no items scheduled for `args.max_no_schedule_days` days
+        
         if no_schedule_days >= args.max_no_schedule_days:
             logging.info(f"Exiting after {no_schedule_days} consecutive days without scheduling.")
             break
+        
+        # Remove fully scheduled observations
+        fully_scheduled_ids = {entry['ID'] for entry in daily_schedule if entry['ID'] != 'DelayCal'}
+        unscheduled = unscheduled[~unscheduled['id'].isin(fully_scheduled_ids)]
+        
+        scheduled_observations.extend(daily_schedule)
+        
+        if day % 20 == 0:
+            print(f"Scheduled day {day}")
 
-        unscheduled = unscheduled.drop(list(scheduled_today))
-        schedule.extend(daily_schedule)
-        day += 1
-        if day % 10 == 0:
-            print(f'Scheduling day: {day}')
+    # report_unscheduled_observations(unscheduled)
+    report_unscheduled_lst_hours(unscheduled_LST_hours)
+    
+    return scheduled_observations
 
-    # Explicitly report leftover unscheduled observation time
+def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_duration, unscheduled_LST_hours):
+    current_LST = 0.0
+    daily_schedule = []
+    daily_scheduled_duration = 0
+    daily_time_remaining = 24
+    scheduled_today = set()
+    
+    sunrise, sunset = get_sunrise_sunset_lst(script_start_datetime + timedelta(days=day - 1))
+    
+    while daily_time_remaining > setup_time and not unscheduled.empty:
+        candidates = get_schedulable_candidates(
+            unscheduled,
+            current_LST,
+            daily_time_remaining,
+            setup_time,
+            min_obs_duration,
+            sunrise,
+            sunset,
+            script_start_datetime,
+            day
+        )
+
+        if not candidates:
+            track_unscheduled_hour(unscheduled_LST_hours, current_LST)
+            current_LST = (current_LST + 0.5) % 24
+            daily_time_remaining -= 0.5
+            continue
+        
+        idx, duration_to_schedule = select_best_candidate(candidates)
+        obs = unscheduled.loc[idx]
+        
+        append_observation_to_schedule(
+            daily_schedule, obs, day, current_LST, setup_time, duration_to_schedule, script_start_datetime
+        )
+
+        update_observation_duration(unscheduled, idx, duration_to_schedule)
+        
+        current_LST = (current_LST + setup_time + duration_to_schedule) % 24
+        daily_time_remaining -= (setup_time + duration_to_schedule)
+        daily_scheduled_duration += duration_to_schedule
+        
+        if unscheduled.at[idx, 'simulated_duration'] <= 0:
+            scheduled_today.add(idx)
+    
+    unscheduled = unscheduled.drop(list(scheduled_today)).copy()
+    
+    return daily_schedule, daily_scheduled_duration
+
+# Constraint checking logic
+def get_schedulable_candidates(unscheduled, current_LST, daily_time_remaining, setup_time, min_obs_duration, sunrise, sunset, script_start_datetime, day):
+    candidates = []
+    captureblock_datetime = script_start_datetime + timedelta(days=(day - 1), hours=current_LST)
+    for idx, obs in unscheduled.iterrows():
+        available_duration = daily_time_remaining - setup_time
+        duration_possible = min(obs['simulated_duration'], available_duration)
+        if duration_possible < min_obs_duration:
+            continue
+        if fits_constraints(obs, (current_LST + setup_time) % 24, duration_possible, sunrise, sunset):
+            candidates.append((idx, duration_possible))
+    return candidates
+
+def select_best_candidate(candidates):
+    # Prioritize candidate with maximum telescope utilization
+    return max(candidates, key=lambda x: x[1])
+
+def append_observation_to_schedule(schedule, obs, day, current_LST, setup_time, duration, script_start_datetime):
+    captureblock_datetime = script_start_datetime + timedelta(days=(day - 1), hours=current_LST)
+    
+    schedule.append({
+        'Day': day,
+        'ID': 'DelayCal',
+        'Proposal ID': obs['proposal_id'],
+        'Description': 'Build and DelayCal',
+        'UTC': captureblock_datetime.isoformat(),
+        'Observation_Start_LST': current_LST,
+        'Observation_End_LST': (current_LST + setup_time) % 24,
+        'Band': obs['instrument_band'],
+        'Night_only': 'n/a',
+        'Visibility_window': '',
+        'Duration_hrs': setup_time
+    })
+
+    schedule.append({
+        'Day': day,
+        'ID': obs['id'],
+        'Proposal ID': obs['proposal_id'],
+        'Description': obs['description'],
+        'UTC': (captureblock_datetime + timedelta(hours=setup_time)).isoformat(),
+        'Observation_Start_LST': (current_LST + setup_time) % 24,
+        'Observation_End_LST': (current_LST + setup_time + duration) % 24,
+        'Band': obs['instrument_band'],
+        'Night_only': obs['night_obs'],
+        'Visibility_window': f"{obs['lst_start']:.2f}-{obs['lst_start_end']:.2f}",
+        'Duration_hrs': duration
+    })
+
+def update_observation_duration(unscheduled, idx, duration):
+    unscheduled.at[idx, 'simulated_duration'] -= duration
+
+def track_unscheduled_hour(unscheduled_LST_hours, current_LST):
+    unscheduled_hour = int(current_LST) % 24
+    unscheduled_LST_hours[unscheduled_hour] += 0.5
+
+def report_unscheduled_observations(unscheduled):
     if not unscheduled.empty:
         logging.info("Unscheduled Observations Remaining:")
-        total_unscheduled = 0
         for _, obs in unscheduled.iterrows():
-            print(f"SB {obs['id']} has {obs['simulated_duration']:.2f} hrs unscheduled.")
-            total_unscheduled += obs['simulated_duration']
+            logging.info(f"SB {obs['id']} has {obs['simulated_duration']:.2f} hrs unscheduled.")
+
+def report_unscheduled_lst_hours(unscheduled_LST_hours):
+    # logging.info('Total unscheduled hours by LST:')
+    # for index, value in enumerate(unscheduled_LST_hours):
+    #     print(f'LST: {index}, unscheduled hours: {float(value)}')
     
     # Report unscheduled hours explicitly
     print(f'Total number of unscheduled hours in LST 0-23 order: ')
@@ -225,9 +240,24 @@ def schedule_observations(unscheduled, max_days, min_obs_duration, setup_time):
     sorted_dict =  {k: v for k, v in sorted(indexed_values.items(), key=lambda item: item[1], reverse=True)}
     print(f'Least LST pressure: {sorted_dict.keys()}')
 
-    return schedule
 
-schedule = schedule_observations(df, args.max_days, args.minimum_observation_duration, args.setup_time)
-schedule_df = pd.DataFrame(schedule)
-schedule_df.to_csv(args.outfile, index=False)
-print(f'Schedule created successfully: {args.outfile}')
+# MeerKAT location - needs to be globally accessible for functions like get_sunrise_sunset_lst
+meerkat_location = EarthLocation(lat=-30.7130*u.deg, lon=21.4430*u.deg, height=1038*u.m)
+
+
+if __name__ == '__main__':
+    args = parser.parse_args()
+
+    # Load approved SBs
+    df = pd.read_csv('data/Observations 2025 - 2025.observations.csv')
+
+    df['lst_start'] = df['lst_start'].apply(lst_to_hours)
+    df['lst_start_end'] = df['lst_start_end'].apply(lst_to_hours)
+
+    # Convert simulated_duration from seconds to hours
+    df['simulated_duration'] = df['simulated_duration'] / 3600
+
+    schedule = schedule_observations(df, args.max_days, args.minimum_observation_duration, args.setup_time)
+    schedule_df = pd.DataFrame(schedule)
+    schedule_df.to_csv(args.outfile, index=False)
+    print(f'Schedule created successfully: {args.outfile}')
