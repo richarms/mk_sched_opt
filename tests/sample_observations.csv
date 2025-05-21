@@ -1,0 +1,11 @@
+id,proposal_id,description,lst_start,lst_start_end,simulated_duration,instrument_band,night_obs,avoid_sunrise_sunset
+SB101,PROP1,Early LST,01:00,05:00,7200,L,No,No
+SB102,PROP1,Late LST,22:00,02:00,10800,L,No,No
+SB103,PROP2,Night Only,20:00,04:00,3600,UHF,Yes,No
+SB104,PROP2,Night Only Avoid Sun,21:00,03:00,5400,UHF,Yes,Yes
+SB105,PROP3,Short Duration,10:00,12:00,1800,L,No,No
+SB106,PROP3,Daytime Avoid Sun,08:00,16:00,14400,S,No,Yes
+SB107,PROP4,Full Day,00:00,23:59,86340,L,No,No
+SB108,PROP4,Crosses Midnight No Sun,23:00,01:00,7200,S,No,No
+SB109,PROP5,Night Only Crosses Midnight,22:30,01:30,10800,UHF,Yes,No
+SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
