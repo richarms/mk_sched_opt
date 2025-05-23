@@ -16,7 +16,7 @@ parser.add_argument('--minimum_observation_duration', type=float, default=0.5, h
 parser.add_argument('--setup_time', type=float, default=0.25, help='Setup time in hours (default 0.25 = 15 min)')
 parser.add_argument('--outfile', type=str, default='schedules/MeerKAT_Schedule.csv', help='Output filename')
 parser.add_argument('--avoid_weds', type=bool, default=True)
-args = parser.parse_args()
+# args = parser.parse_args() # Moved to main block
 
 # Convert LST strings to float (hours)
 def lst_to_hours(lst_str):
@@ -241,12 +241,12 @@ def report_unscheduled_lst_hours(unscheduled_LST_hours):
     print(f'Least LST pressure: {sorted_dict.keys()}')
 
 
-
+# MeerKAT location - needs to be globally accessible for functions like get_sunrise_sunset_lst
+meerkat_location = EarthLocation(lat=-30.7130*u.deg, lon=21.4430*u.deg, height=1038*u.m)
 
 
 if __name__ == '__main__':
-    # MeerKAT location
-    meerkat_location = EarthLocation(lat=-30.7130*u.deg, lon=21.4430*u.deg, height=1038*u.m)
+    args = parser.parse_args()
 
     # Load approved SBs
     df = pd.read_csv('data/Observations 2025 - 2025.observations.csv')
