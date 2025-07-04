@@ -1,11 +1,13 @@
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
 import argparse
+import astropy.units as u
+import numpy as np
 import logging
+import pandas as pd
+
+from astroplan import Observer
 from astropy.time import Time
 from astropy.coordinates import AltAz, Angle, EarthLocation, get_sun
-import astropy.units as u
+from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -16,12 +18,38 @@ parser.add_argument('--minimum_observation_duration', type=float, default=0.5, h
 parser.add_argument('--setup_time', type=float, default=0.25, help='Setup time in hours (default 0.25 = 15 min)')
 parser.add_argument('--outfile', type=str, default='schedules/MeerKAT_Schedule.csv', help='Output filename')
 parser.add_argument('--avoid_weds', type=bool, default=True)
-# args = parser.parse_args() # Moved to main block
+
+# MeerKAT location - (globally accessible)
+meerkat_location = EarthLocation(lat=-30.7130*u.deg, lon=21.4430*u.deg, height=1038*u.m)
 
 # Convert LST strings to float (hours)
 def lst_to_hours(lst_str):
     h, m = map(int, lst_str.split(':'))
     return h + m / 60
+
+def is_nighttime(start, end, sunrise, sunset):
+    if sunrise < sunset:
+        return end <= sunrise or start >= sunset
+    else:
+        return sunrise <= start <= sunset and sunrise <= end <= sunset
+
+def get_sunrise_sunset_lst_astroplan(obs_date):
+    """Use the astroplan library for sunrise/sunset calculation"""
+    observer = Observer(location=meerkat_location)
+    time = Time(obs_date)
+    
+    # Define the horizon for sunrise/sunset
+    horizon = -0.833 * u.deg
+    
+    # astroplan finds the next rise/set time from the given time
+    sunrise_utc = observer.sun_rise_time(time, which='next', horizon=horizon)
+    sunset_utc = observer.sun_set_time(time, which='next', horizon=horizon)
+    
+    # Convert to LST in hours
+    sunrise_lst = sunrise_utc.sidereal_time('apparent', longitude=meerkat_location.lon).hour
+    sunset_lst = sunset_utc.sidereal_time('apparent', longitude=meerkat_location.lon).hour
+
+    return sunrise_lst, sunset_lst
 
 # Calculate sunrise and sunset LST hours
 def get_sunrise_sunset_lst(obs_date):
@@ -121,7 +149,7 @@ def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_du
     daily_time_remaining = 24
     scheduled_today = set()
     
-    sunrise, sunset = get_sunrise_sunset_lst(script_start_datetime + timedelta(days=day - 1))
+    sunrise, sunset = get_sunrise_sunset_lst_astroplan(script_start_datetime + timedelta(days=day - 1))
     
     while daily_time_remaining > setup_time and not unscheduled.empty:
         candidates = get_schedulable_candidates(
@@ -239,10 +267,6 @@ def report_unscheduled_lst_hours(unscheduled_LST_hours):
 
     sorted_dict =  {k: v for k, v in sorted(indexed_values.items(), key=lambda item: item[1], reverse=True)}
     print(f'Least LST pressure: {sorted_dict.keys()}')
-
-
-# MeerKAT location - needs to be globally accessible for functions like get_sunrise_sunset_lst
-meerkat_location = EarthLocation(lat=-30.7130*u.deg, lon=21.4430*u.deg, height=1038*u.m)
 
 
 if __name__ == '__main__':
