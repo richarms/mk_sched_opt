@@ -23,6 +23,28 @@ def lst_to_hours(lst_str):
     h, m = map(int, lst_str.split(':'))
     return h + m / 60
 
+def is_nighttime(start, end, sunrise, sunset):
+    if sunrise < sunset:
+        return end <= sunrise or start >= sunset
+    else:
+        return sunrise <= start <= sunset and sunrise <= end <= sunset
+
+def get_sunrise_sunset_lst_astroplan(obs_date):
+    """Use the astroplan library for sunrise/sunset calculation"""
+    observer = Observer(location=meerkat_location)
+    time = Time(obs_date)
+    
+    # Define the horizon for sunrise/sunset
+    horizon = -0.833 * u.deg
+    
+    # astroplan finds the next rise/set time from the given time
+    sunrise_utc = observer.sun_rise_time(time, which='next', horizon=horizon)
+    sunset_utc = observer.sun_set_time(time, which='next', horizon=horizon)
+    
+    # Convert to LST in hours
+    sunrise_lst = sunrise_utc.sidereal_time('apparent', longitude=meerkat_location.lon).hour
+    sunset_lst = sunset_utc.sidereal_time('apparent', longitude=meerkat_location.lon).hour
+
 # Calculate sunrise and sunset LST hours
 def get_sunrise_sunset_lst(obs_date):
     midnight = Time(obs_date) + timedelta(days=0.5)
