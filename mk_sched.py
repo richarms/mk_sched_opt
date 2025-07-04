@@ -48,7 +48,7 @@ def next_lst_zero(location: EarthLocation, from_time: Time = None) -> Time:
     return from_time + delta_utc
 
 # Helper to check visibility constraints
-def fits_constraints(obs, start_time, duration, sunrise, sunset):
+def fits_constraints(obs, start_time, duration, sunrise, sunset, start_datetime=None):
     end_time = (start_time + duration) % 24
     min_lst, max_lst = obs['lst_start'], obs['lst_start_end']
     if min_lst < max_lst:
@@ -67,10 +67,9 @@ def fits_constraints(obs, start_time, duration, sunrise, sunset):
         if (start_time < sunrise < end_time) or (start_time < sunset < end_time):
             return False
     
-    if args.avoid_weds:
-        pass
-        # if start_time.weekday() == 2 and 6 <= start_time.hour < 13:
-        #     return False
+    if args.avoid_weds and start_datetime is not None:
+        if start_datetime.weekday() == 2 and 6 <= start_datetime.hour < 13:
+            return False
 
     return True
 
@@ -172,7 +171,8 @@ def get_schedulable_candidates(unscheduled, current_LST, daily_time_remaining, s
         duration_possible = min(obs['simulated_duration'], available_duration)
         if duration_possible < min_obs_duration:
             continue
-        if fits_constraints(obs, (current_LST + setup_time) % 24, duration_possible, sunrise, sunset):
+        start_datetime = script_start_datetime + timedelta(days=(day - 1), hours=(current_LST + setup_time))
+        if fits_constraints(obs, (current_LST + setup_time) % 24, duration_possible, sunrise, sunset, start_datetime):
             candidates.append((idx, duration_possible))
     return candidates
 

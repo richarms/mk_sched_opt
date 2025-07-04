@@ -64,24 +64,37 @@ class TestFitsConstraints(unittest.TestCase):
             'lst_start': lst_start, 'lst_start_end': lst_start_end,
             'night_obs': night_obs, 'avoid_sunrise_sunset': avoid_sunrise_sunset
         })
-    def test_lst_visibility(self, mock_args): 
+    def test_lst_visibility(self, mock_args):
         mock_args.avoid_weds=False; sr,ss=5.0,19.0
-        obs_std=self._create_obs_series(10.0,14.0); self.assertTrue(fits_constraints(obs_std,10.0,2.0,sr,ss)); self.assertFalse(fits_constraints(obs_std,8.0,1.0,sr,ss))
-        obs_wrap=self._create_obs_series(22.0,4.0); self.assertTrue(fits_constraints(obs_wrap,23.0,2.0,sr,ss)); self.assertFalse(fits_constraints(obs_wrap,10.0,2.0,sr,ss))
+        obs_std=self._create_obs_series(10.0,14.0)
+        self.assertTrue(fits_constraints(obs_std,10.0,2.0,sr,ss,None))
+        self.assertFalse(fits_constraints(obs_std,8.0,1.0,sr,ss,None))
+        obs_wrap=self._create_obs_series(22.0,4.0)
+        self.assertTrue(fits_constraints(obs_wrap,23.0,2.0,sr,ss,None))
+        self.assertFalse(fits_constraints(obs_wrap,10.0,2.0,sr,ss,None))
     
     def test_night_observation(self, mock_args): 
         mock_args.avoid_weds=False; sr,ss=0.1,0.2 
         obs_yes=self._create_obs_series(night_obs='Yes',lst_start=0.0,lst_start_end=23.99); 
-        self.assertTrue(fits_constraints(obs_yes,9.0,2.0,sr,ss), "NightObs=Y, slot 9-11 LST (OK)")
-        self.assertFalse(fits_constraints(obs_yes,7.0,2.0,sr,ss), "NightObs=Y, slot 7-9 LST (start<8 Fails)")
+        self.assertTrue(fits_constraints(obs_yes,9.0,2.0,sr,ss,None), "NightObs=Y, slot 9-11 LST (OK)")
+        self.assertFalse(fits_constraints(obs_yes,7.0,2.0,sr,ss,None), "NightObs=Y, slot 7-9 LST (start<8 Fails)")
         obs_no=self._create_obs_series(night_obs='No', lst_start=0.0, lst_start_end=23.99); 
-        self.assertTrue(fits_constraints(obs_no,7.0,2.0,sr,ss), "NightObs=N, slot 7-9 LST (OK, constraint ignored)")
+        self.assertTrue(fits_constraints(obs_no,7.0,2.0,sr,ss,None), "NightObs=N, slot 7-9 LST (OK, constraint ignored)")
 
     def test_sunrise_sunset_avoid(self, mock_args): 
         mock_args.avoid_weds=False; obs_yes=self._create_obs_series(avoid_sunrise_sunset='Yes', lst_start=0.0, lst_start_end=23.99)
-        self.assertTrue(fits_constraints(obs_yes,10.0,2.0,5.0,19.0)); self.assertFalse(fits_constraints(obs_yes,10.0,2.0,11.0,19.0))
-        self.assertTrue(fits_constraints(obs_yes,23.0,2.0,23.5,1.5), "Wrapped obs sun conflict (current code returns True)")
-        obs_no=self._create_obs_series(avoid_sunrise_sunset='No'); self.assertTrue(fits_constraints(obs_no,10.0,2.0,11.0,19.0))
+        self.assertTrue(fits_constraints(obs_yes,10.0,2.0,5.0,19.0,None))
+        self.assertFalse(fits_constraints(obs_yes,10.0,2.0,11.0,19.0,None))
+        self.assertTrue(fits_constraints(obs_yes,23.0,2.0,23.5,1.5,None), "Wrapped obs sun conflict (current code returns True)")
+        obs_no=self._create_obs_series(avoid_sunrise_sunset='No'); self.assertTrue(fits_constraints(obs_no,10.0,2.0,11.0,19.0,None))
+
+    def test_avoid_wednesday(self, mock_args):
+        mock_args.avoid_weds=True; sr,ss=0.1,0.2
+        obs=self._create_obs_series(lst_start=0.0,lst_start_end=23.99)
+        dt_wed=datetime(2024,1,3,7,0,0)
+        dt_thu=datetime(2024,1,4,7,0,0)
+        self.assertFalse(fits_constraints(obs,7.0,1.0,sr,ss,dt_wed))
+        self.assertTrue(fits_constraints(obs,7.0,1.0,sr,ss,dt_thu))
 
 class TestGetSchedulableCandidates(unittest.TestCase):
     def _create_df(self, d=None):
