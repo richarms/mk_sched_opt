@@ -5,6 +5,7 @@ import argparse
 import logging
 from astropy.time import Time
 from astropy.coordinates import AltAz, Angle, EarthLocation, get_sun
+from astroplan import Observer
 import astropy.units as u
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -44,6 +45,8 @@ def get_sunrise_sunset_lst_astroplan(obs_date):
     # Convert to LST in hours
     sunrise_lst = sunrise_utc.sidereal_time('apparent', longitude=meerkat_location.lon).hour
     sunset_lst = sunset_utc.sidereal_time('apparent', longitude=meerkat_location.lon).hour
+
+    return sunrise_lst, sunset_lst
 
 # Calculate sunrise and sunset LST hours
 def get_sunrise_sunset_lst(obs_date):
@@ -143,7 +146,7 @@ def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_du
     daily_time_remaining = 24
     scheduled_today = set()
     
-    sunrise, sunset = get_sunrise_sunset_lst_astroplan(script_start_datetime + timedelta(days=day - 1))
+    sunrise, sunset = get_sunrise_sunset_lst(script_start_datetime + timedelta(days=day - 1))
     
     while daily_time_remaining > setup_time and not unscheduled.empty:
         candidates = get_schedulable_candidates(

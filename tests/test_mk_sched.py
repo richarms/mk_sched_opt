@@ -1,4 +1,4 @@
-from mk_sched import lst_to_hours, next_lst_zero, get_sunrise_sunset_lst, fits_constraints, get_schedulable_candidates, select_best_candidate, update_observation_duration, schedule_day
+from mk_sched import lst_to_hours, next_lst_zero, get_sunrise_sunset_lst, get_sunrise_sunset_lst_astroplan, fits_constraints, get_schedulable_candidates, select_best_candidate, update_observation_duration, schedule_day
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
 import astropy.time 
@@ -19,6 +19,18 @@ def test_lst_to_hours_conversion():
     assert lst_to_hours("0:45") == 0.75; assert lst_to_hours("7:00") == 7.0
     assert lst_to_hours("09:09") == 9.15; assert lst_to_hours("23:59") == 23 + 59/60
     assert lst_to_hours("12:00") == 12.0
+
+
+def test_sunrise_sunset_functions():
+    obs_date = datetime(2024, 1, 1)
+    sr1, ss1 = get_sunrise_sunset_lst(obs_date)
+    sr2, ss2 = get_sunrise_sunset_lst_astroplan(obs_date)
+
+    for val in (sr1, ss1, sr2, ss2):
+        assert isinstance(val, (float, np.floating))
+        assert 0.0 <= (val % 24) < 24
+
+    assert abs(((sr2 - ss2) % 24)) > 0.1
 
 class TestNextLSTZero(unittest.TestCase):
     @patch('mk_sched.datetime')
