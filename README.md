@@ -2,8 +2,6 @@
 
 A greedy scheduler built for the MeerKAT radio telescope. It optimizes telescope usage by greedily maximizing the length of scheduled observations within specified constraints, including visibility windows, minimum observation durations, configuration time (i.e. build + DelayCal), and day/night and sunrise/sunset constraints.
 
-## Notes
-
 - **Greedy Scheduling Algorithm:** Maximizes observation durations of available observation time in each schedule block (SB).
 - **Sunrise/Sunset** Computes sunrise and sunset times in Local Sidereal Time (LST) using Astropy.
 - **Current Constraints:**
