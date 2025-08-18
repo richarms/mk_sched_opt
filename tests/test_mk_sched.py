@@ -1,4 +1,17 @@
-from mk_sched import lst_to_hours, next_lst_zero, get_sunrise_sunset_lst, fits_constraints, get_schedulable_candidates, select_best_candidate, update_observation_duration, schedule_day
+import os, sys
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+from mk_sched import (
+    lst_to_hours,
+    next_lst_zero,
+    get_sunrise_sunset_lst,
+    get_sunrise_sunset_lst_astroplan,
+    fits_constraints,
+    get_schedulable_candidates,
+    select_best_candidate,
+    update_observation_duration,
+    schedule_day,
+)
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
 import astropy.time 
@@ -126,8 +139,52 @@ class TestGetSchedulableCandidates(unittest.TestCase):
         m.return_value=True; df_pass=self._create_df([{'id':'S1','simulated_duration':2.0}]); self.assertEqual(get_schedulable_candidates(df_pass,**self.p),[(0,2.0)]); m.assert_called_once(); m.reset_mock()
         df_short=self._create_df([{'id':'S1','simulated_duration':0.4}]); self.assertEqual(get_schedulable_candidates(df_short,**self.p),[]); m.assert_not_called() 
 
-class TestSelectBestCandidate(unittest.TestCase): 
-    def test_selection(self): self.assertEqual(select_best_candidate([('S1',2.0)]),('S1',2.0)); self.assertEqual(select_best_candidate([('S1',2.0),('S2',3.5),('S3',1.5)]),('S2',3.5)); self.assertEqual(select_best_candidate([('SA',4.0),('SB',2.5),('SC',4.0)]),('SA',4.0))
+class TestSelectBestCandidate(unittest.TestCase):
+    def setUp(self):
+        self.unscheduled = pd.DataFrame({
+            'id': ['S1', 'S2', 'S3'],
+            'simulated_duration': [2.0, 3.5, 1.5],
+            'instrument_band': ['L', 'L', 'L'],
+            'night_obs': ['No', 'No', 'No'],
+            'avoid_sunrise_sunset': ['No', 'No', 'No'],
+            'split_count': [0, 0, 0],
+            'product': ['', '', '']
+        })
+        self.prev_mode = None
+        self.current_dt = datetime(2024, 1, 1)
+
+    def test_selection_duration_tiebreak(self):
+        cands = [(0, 2.0), (1, 3.5), (2, 1.5)]
+        idx, dur = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
+        self.assertEqual((idx, dur), (1, 3.5))
+
+    def test_prefers_constraints(self):
+        self.unscheduled.loc[0, 'night_obs'] = 'Yes'
+        cands = [(0, 2.0), (1, 3.5)]
+        idx, _ = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
+        self.assertEqual(idx, 0)
+
+    def test_split_penalty(self):
+        self.unscheduled.loc[0, 'split_count'] = 2
+        cands = [(0, 2.0), (1, 2.0)]
+        idx, _ = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
+        self.assertEqual(idx, 1)
+
+    def test_mode_continuity(self):
+        self.prev_mode = ('l', '32k', 'wide')
+        self.unscheduled.loc[0, 'product'] = 'c856M32k'
+        self.unscheduled.loc[1, 'instrument_band'] = 'UHF'
+        cands = [(0, 2.0), (1, 3.5)]
+        idx, _ = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
+        self.assertEqual(idx, 0)
+
+    def test_cadence_preference(self):
+        self.unscheduled['cadence_days'] = [30.0, 30.0, 30.0]
+        self.unscheduled['last_observed'] = [60000.0, 59950.0, 60000.0]
+        self.current_dt = Time(60030.0, format='mjd').to_datetime()
+        cands = [(0, 1.0), (1, 1.0)]
+        idx, _ = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
+        self.assertEqual(idx, 0)
 
 class TestUpdateObservationDuration(unittest.TestCase):
     def test_updates(self): 
