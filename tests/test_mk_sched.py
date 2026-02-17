@@ -6,6 +6,7 @@ from mk_sched import (
     next_lst_zero,
     get_sunrise_sunset_lst,
     get_sunrise_sunset_lst_astroplan,
+    parse_observation_mode,
     fits_constraints,
     get_schedulable_candidates,
     select_best_candidate,
@@ -171,7 +172,7 @@ class TestSelectBestCandidate(unittest.TestCase):
         self.assertEqual(idx, 1)
 
     def test_mode_continuity(self):
-        self.prev_mode = ('l', '32k', 'wide')
+        self.prev_mode = ('l', '32k', '')
         self.unscheduled.loc[0, 'product'] = 'c856M32k'
         self.unscheduled.loc[1, 'instrument_band'] = 'UHF'
         cands = [(0, 2.0), (1, 3.5)]
@@ -185,6 +186,17 @@ class TestSelectBestCandidate(unittest.TestCase):
         cands = [(0, 1.0), (1, 1.0)]
         idx, _ = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
         self.assertEqual(idx, 0)
+
+    def test_cadence_zero_does_not_crash(self):
+        self.unscheduled['cadence_days'] = [0.0, 30.0, 30.0]
+        self.unscheduled['last_observed'] = [60000.0, 59950.0, 60000.0]
+        cands = [(0, 1.0), (1, 1.0)]
+        idx, _ = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
+        self.assertIn(idx, [0, 1])
+
+    def test_parse_observation_mode_width_not_letter_based(self):
+        obs = pd.Series({'product': 'c856M32k', 'instrument_band': 'L'})
+        self.assertEqual(parse_observation_mode(obs), ('l', '32k', ''))
 
 class TestUpdateObservationDuration(unittest.TestCase):
     def test_updates(self): 
@@ -232,14 +244,14 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         elif 'id' not in df.columns and not df.empty : df['id'] = [f'SB_TEST_{i}' for i in range(len(df))]
         return df
 
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_no_obs_empty_df(self, m_gss, m_args):
         m_args.avoid_weds=False; m_gss.return_value=(6.0,18.0)
         df_empty = self._create_test_df([])
         s,d=schedule_day(df_empty,self.day,self.sdt,self.st,self.min_od,self.ulh)
         self.assertEqual(s,[]); self.assertEqual(d,0.0); self.assertTrue(np.all(self.ulh==0))
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_no_obs_fit_slots(self, m_gss, m_args): 
         m_args.avoid_weds=False; m_gss.return_value=(0.1,0.2)
         df=self._create_test_df([{'id':'SB_TIGHT','lst_start':10.0,'lst_start_end':10.4,'simulated_duration':0.5}])
@@ -249,7 +261,7 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         self.assertEqual(len(s),2, f"SB_TIGHT should be scheduled. Got {s}")
         self.assertAlmostEqual(d_sched, 0.5)
 
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_simple_scheduling_one_obs(self, m_gss, m_args): # SB101
         m_args.avoid_weds=False; m_gss.return_value=(23.9,23.99)
         df=self.udf[self.udf['id']=='SB101'].copy().reset_index(drop=True)
@@ -267,7 +279,7 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
                         # current_LST goes from 3.25 to 3.25 + 40*0.5 = 23.25. ulh[int(23.25)]=ulh[23] gets one 0.5. Correct.
         self.assertTrue(np.allclose(self.ulh,exp_ulh), f"ULH: Got {self.ulh}, Exp {exp_ulh}")
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_multiple_obs_scheduled(self, m_gss, m_args): # SB101, SB105
         m_args.avoid_weds=False; m_gss.return_value=(0.0,0.1)
         ids=['SB101','SB105']; df=self.udf[self.udf['id'].isin(ids)].copy().reset_index(drop=True)
@@ -278,7 +290,7 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         self.assertEqual(len(s),4); self.assertAlmostEqual(d_tot,d1+d5)
         self.assertEqual(s[1]['ID'],'SB101'); self.assertEqual(s[3]['ID'],'SB105')
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_obs_partially_scheduled_day_end(self, m_gss, m_args):
         m_args.avoid_weds=False; m_gss.return_value=(23.9,23.99)
         data=[{'id':'SB_VL','lst_start':0.0,'lst_start_end':23.99,'simulated_duration':30.0}]
@@ -291,13 +303,13 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         self.assertAlmostEqual(d_tot,exp_part); self.assertAlmostEqual(df_long.loc[0,'simulated_duration'],init_dur-exp_part)
         self.assertAlmostEqual(np.sum(self.ulh),0.0)
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_min_obs_dur_filter_schedule_day(self, m_gss, m_args):
         m_args.avoid_weds=False; m_gss.return_value=(0.1,0.2)
         data=[{'id':'SB_TS','simulated_duration':self.min_od-0.1,'lst_start':0.0,'lst_start_end':1.0}]
         df=self._create_test_df(data); s,_=schedule_day(df,self.day,self.sdt,self.st,self.min_od,self.ulh); self.assertEqual(len(s),0)
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_lst_wrap_schedule(self, m_gss, m_args): # SB102
         m_args.avoid_weds=False; m_gss.return_value=(5.0,18.0) 
         df=self.udf[self.udf['id']=='SB102'].copy().reset_index(drop=True) 
@@ -307,7 +319,7 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         self.assertEqual(len(s),2); self.assertEqual(s[1]['ID'],'SB102'); self.assertAlmostEqual(d,sb102_dur)
         self.assertAlmostEqual(s[0]['Observation_Start_LST'],0.0) 
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_night_obs_constraint_integration(self, m_gss, m_args):
         m_args.avoid_weds=False; m_gss.return_value=(0.1,0.2) 
         df_fail=self.udf[self.udf['id']=='SB103'].copy().reset_index(drop=True) 
@@ -318,7 +330,7 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         self.ulh=np.zeros(24); s_p,d_p=schedule_day(df_pass,self.day,self.sdt,self.st,self.min_od,self.ulh)
         self.assertEqual(len(s_p),2); self.assertAlmostEqual(d_p,1.0)
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_sun_avoid_integration(self, m_gss, m_args): 
         m_args.avoid_weds=False
         df_orig=self.udf[self.udf['id']=='SB106'].copy().reset_index(drop=True) 

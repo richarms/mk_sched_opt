@@ -3,6 +3,7 @@ import astropy.units as u
 import numpy as np
 import logging
 import pandas as pd
+import re
 
 from astroplan import Observer
 from astropy.time import Time
@@ -155,7 +156,7 @@ def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_du
     scheduled_today = set()
     prev_mode = None
 
-    sunrise, sunset = get_sunrise_sunset_lst(script_start_datetime + timedelta(days=day - 1))
+    sunrise, sunset = get_sunrise_sunset_lst_astroplan(script_start_datetime + timedelta(days=day - 1))
 
     while daily_time_remaining > setup_time and not unscheduled.empty:
         candidates = get_schedulable_candidates(
@@ -226,7 +227,12 @@ def parse_observation_mode(obs):
         channels = '4k'
     else:
         channels = ''
-    width = 'narrow' if 'n' in product else 'wide'
+    if 'narrow' in product or re.search(r'(^|[^a-z])n([^a-z]|$)', product):
+        width = 'narrow'
+    elif 'wide' in product or re.search(r'(^|[^a-z])w([^a-z]|$)', product):
+        width = 'wide'
+    else:
+        width = ''
     return band, channels, width
 
 
@@ -247,7 +253,13 @@ def calculate_observation_score(obs, duration, split_count, prev_mode, current_d
     if prev_mode is not None and current_mode == prev_mode:
         score += 1
 
-    if 'cadence_days' in obs and 'last_observed' in obs and not pd.isna(obs['cadence_days']) and not pd.isna(obs['last_observed']):
+    if (
+        'cadence_days' in obs
+        and 'last_observed' in obs
+        and not pd.isna(obs['cadence_days'])
+        and not pd.isna(obs['last_observed'])
+        and obs['cadence_days'] > 0
+    ):
         current_mjd = Time(current_datetime).mjd
         next_due = obs['last_observed'] + obs['cadence_days']
         diff = abs(current_mjd - next_due)
