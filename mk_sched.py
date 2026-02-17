@@ -19,6 +19,10 @@ parser.add_argument('--minimum_observation_duration', type=float, default=0.5, h
 parser.add_argument('--setup_time', type=float, default=0.25, help='Setup time in hours (default 0.25 = 15 min)')
 parser.add_argument('--outfile', type=str, default='schedules/MeerKAT_Schedule.csv', help='Output filename')
 parser.add_argument('--avoid_weds', type=bool, default=True)
+parser.add_argument('--progress_every', type=int, default=20, help='Emit progress message every N days (default 20)')
+verbosity_group = parser.add_mutually_exclusive_group()
+verbosity_group.add_argument('--quiet', action='store_true', help='Only log warnings/errors and final summary')
+verbosity_group.add_argument('--verbose', action='store_true', help='Enable debug-level logging')
 
 # MeerKAT location - (globally accessible)
 meerkat_location = EarthLocation(lat=-30.7130*u.deg, lon=21.4430*u.deg, height=1038*u.m)
@@ -76,31 +80,34 @@ def next_lst_zero(location: EarthLocation, from_time: Time = None) -> Time:
 
     return from_time + delta_utc
 
-# Helper to check visibility constraints
-def fits_constraints(obs, start_time, duration, sunrise, sunset, start_datetime=None):
+def _constraint_failure_reason(obs, start_time, duration, sunrise, sunset, start_datetime=None):
     end_time = (start_time + duration) % 24
     min_lst, max_lst = obs['lst_start'], obs['lst_start_end']
+
     if min_lst < max_lst:
         visible = min_lst <= start_time < max_lst
     else:
         visible = start_time >= min_lst or start_time < max_lst
-
     if not visible:
-        return False
+        return "lst_visibility"
 
     if obs['night_obs'] == 'Yes':
         if not ((8 <= start_time <= 20) and (8 <= end_time <= 20)):
-            return False
+            return "night_only"
 
     if obs['avoid_sunrise_sunset'] == 'Yes':
         if (start_time < sunrise < end_time) or (start_time < sunset < end_time):
-            return False
-    
+            return "sunrise_sunset"
+
     if args.avoid_weds and start_datetime is not None:
         if start_datetime.weekday() == 2 and 6 <= start_datetime.hour < 13:
-            return False
+            return "avoid_weds"
 
-    return True
+    return None
+
+# Helper to check visibility constraints
+def fits_constraints(obs, start_time, duration, sunrise, sunset, start_datetime=None):
+    return _constraint_failure_reason(obs, start_time, duration, sunrise, sunset, start_datetime) is None
 
 def schedule_observations(unscheduled_df, max_days, min_obs_duration, setup_time):
     unscheduled = unscheduled_df.copy()
@@ -111,19 +118,33 @@ def schedule_observations(unscheduled_df, max_days, min_obs_duration, setup_time
     
     unscheduled_LST_hours = np.zeros(24)
     no_schedule_days = 0
+    days_processed = 0
+    total_scheduled_duration = 0.0
+    no_candidate_reasons = {"min_duration": 0, "lst_visibility": 0, "night_only": 0, "sunrise_sunset": 0, "avoid_weds": 0}
     
     for day in range(1, max_days + 1):
-        daily_schedule, daily_scheduled_duration = schedule_day(
+        days_processed = day
+        daily_schedule, daily_scheduled_duration, daily_reason_counts = schedule_day(
             unscheduled,
             day,
             script_start_datetime,
             setup_time,
             min_obs_duration,
-            unscheduled_LST_hours
+            unscheduled_LST_hours,
+            include_reason_counts=True
         )
+        total_scheduled_duration += daily_scheduled_duration
+        for reason, count in daily_reason_counts.items():
+            no_candidate_reasons[reason] += count
         
         if daily_scheduled_duration == 0:
             no_schedule_days += 1
+            reason_summary = ", ".join(f"{k}={v}" for k, v in daily_reason_counts.items() if v > 0) or "none"
+            logging.info(
+                "Day %d: 0 scheduled hours (no candidates). Rejection counts: %s",
+                day,
+                reason_summary,
+            )
         else:
             no_schedule_days = 0
         
@@ -137,15 +158,32 @@ def schedule_observations(unscheduled_df, max_days, min_obs_duration, setup_time
         
         scheduled_observations.extend(daily_schedule)
         
-        if day % 20 == 0:
-            print(f"Scheduled day {day}")
+        if args.progress_every > 0 and day % args.progress_every == 0:
+            logging.info(
+                "Progress day %d/%d: scheduled %.2f hours today, %.2f cumulative, %d remaining observations",
+                day,
+                max_days,
+                daily_scheduled_duration,
+                total_scheduled_duration,
+                len(unscheduled),
+            )
 
     # report_unscheduled_observations(unscheduled)
     report_unscheduled_lst_hours(unscheduled_LST_hours)
+    final_log_level = logging.WARNING if args.quiet else logging.INFO
+    logging.log(
+        final_log_level,
+        "Run summary: days_processed=%d total_scheduled_hours=%.2f scheduled_entries=%d remaining_observations=%d no_candidate_counts=%s",
+        days_processed,
+        total_scheduled_duration,
+        len(scheduled_observations),
+        len(unscheduled),
+        ", ".join(f"{k}:{v}" for k, v in no_candidate_reasons.items()),
+    )
     
     return scheduled_observations
 
-def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_duration, unscheduled_LST_hours):
+def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_duration, unscheduled_LST_hours, include_reason_counts=False):
     if 'split_count' not in unscheduled.columns:
         unscheduled['split_count'] = 0
 
@@ -155,11 +193,12 @@ def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_du
     daily_time_remaining = 24
     scheduled_today = set()
     prev_mode = None
+    no_candidate_reasons = {"min_duration": 0, "lst_visibility": 0, "night_only": 0, "sunrise_sunset": 0, "avoid_weds": 0}
 
     sunrise, sunset = get_sunrise_sunset_lst_astroplan(script_start_datetime + timedelta(days=day - 1))
 
     while daily_time_remaining > setup_time and not unscheduled.empty:
-        candidates = get_schedulable_candidates(
+        candidates, reason_counts = get_schedulable_candidates(
             unscheduled,
             current_LST,
             daily_time_remaining,
@@ -168,10 +207,13 @@ def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_du
             sunrise,
             sunset,
             script_start_datetime,
-            day
+            day,
+            return_reasons=True,
         )
 
         if not candidates:
+            for reason, count in reason_counts.items():
+                no_candidate_reasons[reason] += count
             track_unscheduled_hour(unscheduled_LST_hours, current_LST)
             current_LST = (current_LST + 0.5) % 24
             daily_time_remaining -= 0.5
@@ -202,20 +244,37 @@ def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_du
 
     unscheduled = unscheduled.drop(list(scheduled_today)).copy()
 
+    if include_reason_counts:
+        return daily_schedule, daily_scheduled_duration, no_candidate_reasons
+
     return daily_schedule, daily_scheduled_duration
 
 # Constraint checking logic
-def get_schedulable_candidates(unscheduled, current_LST, daily_time_remaining, setup_time, min_obs_duration, sunrise, sunset, script_start_datetime, day):
+def get_schedulable_candidates(unscheduled, current_LST, daily_time_remaining, setup_time, min_obs_duration, sunrise, sunset, script_start_datetime, day, return_reasons=False):
     candidates = []
-    captureblock_datetime = script_start_datetime + timedelta(days=(day - 1), hours=current_LST)
+    reason_counts = {"min_duration": 0, "lst_visibility": 0, "night_only": 0, "sunrise_sunset": 0, "avoid_weds": 0}
+    captureblock_datetime = script_start_datetime + timedelta(days=(day - 1), hours=current_LST)  # retained for future scheduling metadata
     for idx, obs in unscheduled.iterrows():
         available_duration = daily_time_remaining - setup_time
         duration_possible = min(obs['simulated_duration'], available_duration)
         if duration_possible < min_obs_duration:
+            reason_counts["min_duration"] += 1
             continue
         start_datetime = script_start_datetime + timedelta(days=(day - 1), hours=(current_LST + setup_time))
-        if fits_constraints(obs, (current_LST + setup_time) % 24, duration_possible, sunrise, sunset, start_datetime):
-            candidates.append((idx, duration_possible))
+        if return_reasons:
+            failure_reason = _constraint_failure_reason(
+                obs, (current_LST + setup_time) % 24, duration_possible, sunrise, sunset, start_datetime
+            )
+            if failure_reason is None:
+                candidates.append((idx, duration_possible))
+            else:
+                reason_counts[failure_reason] += 1
+        else:
+            if fits_constraints(obs, (current_LST + setup_time) % 24, duration_possible, sunrise, sunset, start_datetime):
+                candidates.append((idx, duration_possible))
+
+    if return_reasons:
+        return candidates, reason_counts
     return candidates
 
 def parse_observation_mode(obs):
@@ -324,24 +383,29 @@ def report_unscheduled_observations(unscheduled):
             logging.info(f"SB {obs['id']} has {obs['simulated_duration']:.2f} hrs unscheduled.")
 
 def report_unscheduled_lst_hours(unscheduled_LST_hours):
-    # logging.info('Total unscheduled hours by LST:')
-    # for index, value in enumerate(unscheduled_LST_hours):
-    #     print(f'LST: {index}, unscheduled hours: {float(value)}')
-    
-    # Report unscheduled hours explicitly
-    print(f'Total number of unscheduled hours in LST 0-23 order: ')
+    logging.info('Total unscheduled hours by LST (0-23 order):')
     indexed_values = {}
-    # Create a dictionary with sorted values from a unscheduled list as keys, and original indices as values.
     for index, value in enumerate(unscheduled_LST_hours):
-        print(f'LST: {index}, total: {float(value)}')
+        logging.info('LST %d: total %.1f', index, float(value))
         indexed_values[index] = float(value)
 
     sorted_dict =  {k: v for k, v in sorted(indexed_values.items(), key=lambda item: item[1], reverse=True)}
-    print(f'Least LST pressure: {sorted_dict.keys()}')
+    logging.info('Least LST pressure: %s', list(sorted_dict.keys()))
+
+
+def configure_logging(verbose=False, quiet=False):
+    if verbose:
+        level = logging.DEBUG
+    elif quiet:
+        level = logging.WARNING
+    else:
+        level = logging.INFO
+    logging.getLogger().setLevel(level)
 
 
 if __name__ == '__main__':
     args = parser.parse_args()
+    configure_logging(verbose=args.verbose, quiet=args.quiet)
 
     # Load approved SBs
     df = pd.read_csv('data/Observations 2025 - 2025.observations.csv')
@@ -355,4 +419,5 @@ if __name__ == '__main__':
     schedule = schedule_observations(df, args.max_days, args.minimum_observation_duration, args.setup_time)
     schedule_df = pd.DataFrame(schedule)
     schedule_df.to_csv(args.outfile, index=False)
-    print(f'Schedule created successfully: {args.outfile}')
+    final_log_level = logging.WARNING if args.quiet else logging.INFO
+    logging.log(final_log_level, 'Schedule created successfully: %s', args.outfile)
