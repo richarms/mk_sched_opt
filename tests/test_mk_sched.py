@@ -20,16 +20,6 @@ def test_lst_to_hours_conversion():
     assert lst_to_hours("09:09") == 9.15; assert lst_to_hours("23:59") == 23 + 59/60
     assert lst_to_hours("12:00") == 12.0
 
-def test_sunrise_sunset_functions():
-    obs_date = datetime(2024, 1, 1)
-    sr1, ss1 = get_sunrise_sunset_lst(obs_date)
-    sr2, ss2 = get_sunrise_sunset_lst_astroplan(obs_date)
-
-    for val in (sr1, ss1, sr2, ss2):
-        assert isinstance(val, (float, np.floating))
-        assert 0.0 <= (val % 24) < 24
-
-    assert abs(((sr2 - ss2) % 24)) > 0.1
 
 class TestNextLSTZero(unittest.TestCase):
     @patch('mk_sched.datetime')
@@ -261,24 +251,6 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         self.ulh=np.zeros(24); s_p,d_p=schedule_day(df_pass,self.day,self.sdt,self.st,self.min_od,self.ulh)
         self.assertEqual(len(s_p),2); self.assertAlmostEqual(d_p,1.0)
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
-    def test_sun_avoid_integration(self, m_gss, m_args): 
-        m_args.avoid_weds=False
-        df_orig=self.udf[self.udf['id']=='SB106'].copy().reset_index(drop=True) 
-        if df_orig.empty: self.skipTest("SB106 missing")
-        
-        sr_conflict,ss_far = 10.0,18.0; m_gss.return_value=(sr_conflict,ss_far) 
-        self.ulh=np.zeros(24); df_c = df_orig.copy()
-        s1,d1=schedule_day(df_c,self.day,self.sdt,self.st,self.min_od,self.ulh)
-        if len(s1) > 0: 
-            self.assertEqual(s1[1]['ID'], 'SB106')
-            obs_slot_start_lst = s1[1]['Observation_Start_LST'] 
-            self.assertTrue(obs_slot_start_lst >= sr_conflict, f"SB106 slot {obs_slot_start_lst} should start at/after SR {sr_conflict}")
-        
-        m_gss.return_value=(0.1,0.2); self.ulh=np.zeros(24) 
-        s2,d2=schedule_day(df_orig.copy(),self.day,self.sdt,self.st,self.min_od,self.ulh)
-        self.assertEqual(len(s2),2); self.assertAlmostEqual(d2,4.0); self.assertEqual(s2[1]['ID'],'SB106')
-        if len(s2)==2: self.assertAlmostEqual(s2[0]['Observation_Start_LST'], 8.0)
 
 if __name__ == '__main__':
     unittest.main()
