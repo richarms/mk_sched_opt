@@ -15,7 +15,21 @@ A scheduler built for the MeerKAT radio telescope. It optimizes telescope usage 
 ```sh
 git clone https://github.com/richarms/mk_sched_opt.git
 cd mk_sched_opt
-pip install -r requirements.txt
+uv venv .venv
+source .venv/bin/activate
+uv pip sync requirements.txt
+```
+
+## Dependency Workflow (uv)
+
+Use `requirements.in` for direct dependencies only, and compile a pinned `requirements.txt` lock file.
+
+```sh
+# After changing requirements.in
+uv pip compile requirements.in -o requirements.txt
+
+# Install exact locked environment
+uv pip sync requirements.txt
 ```
 
 ### Requirements
@@ -28,7 +42,7 @@ pip install -r requirements.txt
 ## Usage:
 
 ```sh
-python mk_sched.py \
+uv run mk_sched.py \
   --max_days 100 \
   --max_no_schedule_days 2 \
   --minimum_observation_duration 0.75 \
@@ -69,4 +83,3 @@ Writes a CSV file to ```schedules/```
 - `Night_only`: Indicates if night observation is required
 - `Visibility_window`: Allowed LST visibility window
 - `Duration_hrs`: Duration of each scheduled segment in hours
-
