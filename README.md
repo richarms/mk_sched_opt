@@ -46,15 +46,21 @@ uv run mk_sched.py \
   --max_days 100 \
   --max_no_schedule_days 2 \
   --minimum_observation_duration 0.75 \
-  --setup_time 0.3
+  --setup_time 0.3 \
+  --infile "data/Observations 2025 - 2025.observations.csv" \
+  --outfile "schedules/MeerKAT_Schedule.csv" \
+  --avoid_weds True
 ```
 
 ### Command-line Arguments
 
-- `--max_days`: Maximum scheduling period (default: 150 days)
-- `--max_no_schedule_days`: Maximum consecutive days without scheduling before stopping (default: 3)
-- `--minimum_observation_duration`: Minimum duration of observations in hours (default: 0.5 hours / 30 min)
-- `--setup_time`: Setup time required before each observation in hours (default: 0.25 hours / 15 min)
+- `-d, --max_days`: Maximum scheduling period (default: 150 days)
+- `-n, --max_no_schedule_days`: Maximum consecutive days without scheduling before stopping (default: 3)
+- `-m, --minimum_observation_duration`: Minimum duration of observations in hours (default: 0.5 hours / 30 min)
+- `-s, --setup_time`: Setup time required before each observation in hours (default: 0.25 hours / 15 min)
+- `-i, --infile`: Input observation CSV path (default: `data/Observations 2025 - 2025.observations.csv`)
+- `-o, --outfile`: Output schedule CSV path (default: `schedules/MeerKAT_Schedule.csv`)
+- `-w, --avoid_weds`: Skip Wednesday 06:00-13:00 slots when `True` (default: `True`)
 
 ## Input
 
