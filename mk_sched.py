@@ -108,7 +108,45 @@ def _constraint_failure_reason(obs, start_time, duration, sunrise, sunset, start
         if start_datetime.weekday() == 2 and 6 <= start_datetime.hour < 13:
             return "avoid_weds"
 
+    preferred_windows = _extract_date_windows(obs, "preferred_dates")
+    if preferred_windows and start_datetime is not None:
+        obs_date = pd.Timestamp(start_datetime).date()
+        in_preferred_window = any(start_date <= obs_date <= end_date for start_date, end_date in preferred_windows)
+        if not in_preferred_window:
+            return "preferred_dates"
+
     return None
+
+def _extract_date_windows(obs, prefix):
+    windows = []
+    start_suffix = "_start_date"
+    end_suffix = "_end_date"
+
+    for key in obs.index:
+        if not (key.startswith(prefix) and key.endswith(start_suffix)):
+            continue
+        base = key[: -len(start_suffix)]
+        end_key = f"{base}{end_suffix}"
+        if end_key not in obs.index:
+            continue
+
+        start_raw = obs.get(key)
+        end_raw = obs.get(end_key)
+        if pd.isna(start_raw) or pd.isna(end_raw) or str(start_raw).strip() == "" or str(end_raw).strip() == "":
+            continue
+
+        start_ts = pd.to_datetime(start_raw, utc=True, errors="coerce")
+        end_ts = pd.to_datetime(end_raw, utc=True, errors="coerce")
+        if pd.isna(start_ts) or pd.isna(end_ts):
+            continue
+
+        start_date, end_date = start_ts.date(), end_ts.date()
+        if start_date <= end_date:
+            windows.append((start_date, end_date))
+        else:
+            windows.append((end_date, start_date))
+
+    return windows
 
 # Helper to check visibility constraints
 def fits_constraints(obs, start_time, duration, sunrise, sunset, start_datetime=None):
@@ -125,7 +163,7 @@ def schedule_observations(unscheduled_df, max_days, min_obs_duration, setup_time
     no_schedule_days = 0
     days_processed = 0
     total_scheduled_duration = 0.0
-    no_candidate_reasons = {"min_duration": 0, "lst_visibility": 0, "night_only": 0, "sunrise_sunset": 0, "avoid_weds": 0}
+    no_candidate_reasons = {"min_duration": 0, "lst_visibility": 0, "night_only": 0, "sunrise_sunset": 0, "avoid_weds": 0, "preferred_dates": 0}
     
     for day in range(1, max_days + 1):
         days_processed = day
@@ -198,7 +236,7 @@ def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_du
     daily_time_remaining = 24
     scheduled_today = set()
     prev_mode = None
-    no_candidate_reasons = {"min_duration": 0, "lst_visibility": 0, "night_only": 0, "sunrise_sunset": 0, "avoid_weds": 0}
+    no_candidate_reasons = {"min_duration": 0, "lst_visibility": 0, "night_only": 0, "sunrise_sunset": 0, "avoid_weds": 0, "preferred_dates": 0}
 
     sunrise, sunset = get_sunrise_sunset_lst_astroplan(script_start_datetime + timedelta(days=day - 1))
 
@@ -257,7 +295,7 @@ def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_du
 # Constraint checking logic
 def get_schedulable_candidates(unscheduled, current_LST, daily_time_remaining, setup_time, min_obs_duration, sunrise, sunset, script_start_datetime, day, return_reasons=False):
     candidates = []
-    reason_counts = {"min_duration": 0, "lst_visibility": 0, "night_only": 0, "sunrise_sunset": 0, "avoid_weds": 0}
+    reason_counts = {"min_duration": 0, "lst_visibility": 0, "night_only": 0, "sunrise_sunset": 0, "avoid_weds": 0, "preferred_dates": 0}
     captureblock_datetime = script_start_datetime + timedelta(days=(day - 1), hours=current_LST)  # retained for future scheduling metadata
     for idx, obs in unscheduled.iterrows():
         available_duration = daily_time_remaining - setup_time

@@ -72,13 +72,16 @@ class TestNextLSTZero(unittest.TestCase):
 
 @patch('mk_sched.args', create=True) 
 class TestFitsConstraints(unittest.TestCase):
-    def _create_obs_series(self, lst_start=10.0, lst_start_end=14.0, night_obs='No', avoid_sunrise_sunset='No'):
-        return pd.Series({
+    def _create_obs_series(self, lst_start=10.0, lst_start_end=14.0, night_obs='No', avoid_sunrise_sunset='No', extra=None):
+        obs = {
             'id': 'SB_TEST', 'proposal_id': 'P_TEST', 'description': 'D_TEST', 
             'instrument_band': 'L', 'simulated_duration': 1.0,
             'lst_start': lst_start, 'lst_start_end': lst_start_end,
             'night_obs': night_obs, 'avoid_sunrise_sunset': avoid_sunrise_sunset
-        })
+        }
+        if extra:
+            obs.update(extra)
+        return pd.Series(obs)
     def test_lst_visibility(self, mock_args):
         mock_args.avoid_weds=False; sr,ss=5.0,19.0
         obs_std=self._create_obs_series(10.0,14.0)
@@ -110,6 +113,21 @@ class TestFitsConstraints(unittest.TestCase):
         dt_thu=datetime(2024,1,4,7,0,0)
         self.assertFalse(fits_constraints(obs,7.0,1.0,sr,ss,dt_wed))
         self.assertTrue(fits_constraints(obs,7.0,1.0,sr,ss,dt_thu))
+
+    def test_preferred_dates_window(self, mock_args):
+        mock_args.avoid_weds=False; sr,ss=0.1,0.2
+        obs=self._create_obs_series(
+            lst_start=0.0,lst_start_end=23.99,
+            extra={
+                'preferred_dates_start_date': '2025-03-20T00:00:00.000Z',
+                'preferred_dates_end_date': '2025-03-25T00:00:00.000Z',
+                'preferred_dates_1_start_date': '2025-04-01T00:00:00.000Z',
+                'preferred_dates_1_end_date': '2025-04-02T00:00:00.000Z',
+            },
+        )
+        self.assertTrue(fits_constraints(obs,7.0,1.0,sr,ss,datetime(2025,3,22,7,0,0)))
+        self.assertTrue(fits_constraints(obs,7.0,1.0,sr,ss,datetime(2025,4,2,7,0,0)))
+        self.assertFalse(fits_constraints(obs,7.0,1.0,sr,ss,datetime(2025,3,30,7,0,0)))
 
 class TestGetSchedulableCandidates(unittest.TestCase):
     def _create_df(self, d=None):
@@ -338,6 +356,25 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         s2,d2=schedule_day(df_orig.copy(),self.day,self.sdt,self.st,self.min_od,self.ulh)
         self.assertEqual(len(s2),2); self.assertAlmostEqual(d2,4.0); self.assertEqual(s2[1]['ID'],'SB106')
         if len(s2)==2: self.assertAlmostEqual(s2[0]['Observation_Start_LST'], 8.0)
+
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
+    def test_preferred_dates_schedule_day(self, m_gss, m_args):
+        m_args.avoid_weds=False; m_gss.return_value=(0.1,0.2)
+        df=self._create_test_df([{
+            'id':'SB_PREF',
+            'lst_start':0.0,
+            'lst_start_end':23.99,
+            'simulated_duration':1.0,
+            'preferred_dates_start_date':'2024-01-01T00:00:00.000Z',
+            'preferred_dates_end_date':'2024-01-02T00:00:00.000Z',
+        }])
+        # day=1 with setUp script start date 2024-01-01 should pass preferred window.
+        s_ok,d_ok=schedule_day(df.copy(),self.day,self.sdt,self.st,self.min_od,np.zeros(24))
+        self.assertEqual(len(s_ok),2); self.assertAlmostEqual(d_ok,1.0)
+
+        # Shift to day outside preferred window should fail to schedule.
+        s_bad,d_bad=schedule_day(df.copy(),self.day+4,self.sdt,self.st,self.min_od,np.zeros(24))
+        self.assertEqual(len(s_bad),0); self.assertAlmostEqual(d_bad,0.0)
 
 if __name__ == '__main__':
     unittest.main()
