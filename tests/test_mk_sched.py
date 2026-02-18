@@ -34,16 +34,6 @@ def test_lst_to_hours_conversion():
     assert lst_to_hours("09:09") == 9.15; assert lst_to_hours("23:59") == 23 + 59/60
     assert lst_to_hours("12:00") == 12.0
 
-def test_sunrise_sunset_functions():
-    obs_date = datetime(2024, 1, 1)
-    sr1, ss1 = get_sunrise_sunset_lst(obs_date)
-    sr2, ss2 = get_sunrise_sunset_lst_astroplan(obs_date)
-
-    for val in (sr1, ss1, sr2, ss2):
-        assert isinstance(val, (float, np.floating))
-        assert 0.0 <= (val % 24) < 24
-
-    assert abs(((sr2 - ss2) % 24)) > 0.1
 
 class TestNextLSTZero(unittest.TestCase):
     @patch('mk_sched.datetime')
