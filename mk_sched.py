@@ -8,23 +8,24 @@ import re
 from astroplan import Observer
 from astropy.time import Time
 from astropy.coordinates import AltAz, Angle, EarthLocation, get_sun
-from datetime import datetime, timedelta
+from astropy.utils import iers
+from datetime import datetime, timedelta, timezone
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-parser = argparse.ArgumentParser(description="MeerKAT Scheduling Script")
-parser.add_argument('--max_days', type=int, default=150, help='Maximum number of scheduling days')
-parser.add_argument('--max_no_schedule_days', type=int, default=3, help='Exit scheduler after this many days without any observations')
-parser.add_argument('--minimum_observation_duration', type=float, default=0.5, help='Minimum observation duration in hours (default 0.5 = 30 min)')
-parser.add_argument('--setup_time', type=float, default=0.25, help='Setup time in hours (default 0.25 = 15 min)')
-parser.add_argument('--outfile', type=str, default='schedules/MeerKAT_Schedule.csv', help='Output filename')
-parser.add_argument('--avoid_weds', type=bool, default=True)
-parser.add_argument('--progress_every', type=int, default=20, help='Emit progress message every N days (default 20)')
-verbosity_group = parser.add_mutually_exclusive_group()
-verbosity_group.add_argument('--quiet', action='store_true', help='Only log warnings/errors and final summary')
-verbosity_group.add_argument('--verbose', action='store_true', help='Enable debug-level logging')
+# Allow scheduling to continue when fresh IERS-A downloads are unavailable.
+iers.conf.auto_max_age = None
 
-# MeerKAT location - (globally accessible)
+parser = argparse.ArgumentParser(description="MeerKAT Scheduling Script")
+parser.add_argument('-d', '--max_days', type=int, default=150, help='Maximum number of scheduling days')
+parser.add_argument('-n', '--max_no_schedule_days', type=int, default=3, help='Exit scheduler after this many days without any observations')
+parser.add_argument('-m', '--minimum_observation_duration', type=float, default=0.5, help='Minimum observation duration in hours (default 0.5 = 30 min)')
+parser.add_argument('-s', '--setup_time', type=float, default=0.25, help='Setup time in hours (default 0.25 = 15 min)')
+parser.add_argument('-o', '--outfile', type=str, default='schedules/MeerKAT_Schedule.csv', help='Output filename')
+parser.add_argument('-w', '--avoid_weds', type=bool, default=True)
+parser.add_argument('-i', '--infile', type=str,  default='data/Observations 2025 - 2025.observations.csv')
+
+# MeerKAT location
 meerkat_location = EarthLocation(lat=-30.7130*u.deg, lon=21.4430*u.deg, height=1038*u.m)
 
 # Convert LST strings to float (hours)
@@ -70,7 +71,7 @@ def get_sunrise_sunset_lst(obs_date):
 def next_lst_zero(location: EarthLocation, from_time: Time = None) -> Time:
     # Calculate the next UTC time when local sidereal time (LST) will be 0h at the given EarthLocation.
     if from_time is None:
-        from_time = Time(datetime.utcnow())
+        from_time = Time(datetime.now(timezone.utc))
 
     current_lst = from_time.sidereal_time('apparent', longitude=location.lon)
     delta_lst = (Angle(24 * u.hourangle) - current_lst).wrap_at(24 * u.hourangle)
@@ -408,7 +409,7 @@ if __name__ == '__main__':
     configure_logging(verbose=args.verbose, quiet=args.quiet)
 
     # Load approved SBs
-    df = pd.read_csv('data/Observations 2025 - 2025.observations.csv')
+    df = pd.read_csv(args.infile)
 
     df['lst_start'] = df['lst_start'].apply(lst_to_hours)
     df['lst_start_end'] = df['lst_start_end'].apply(lst_to_hours)
