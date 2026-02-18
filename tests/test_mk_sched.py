@@ -1,4 +1,18 @@
-from mk_sched import lst_to_hours, next_lst_zero, get_sunrise_sunset_lst, fits_constraints, get_schedulable_candidates, select_best_candidate, update_observation_duration, schedule_day
+import os, sys
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+from mk_sched import (
+    lst_to_hours,
+    next_lst_zero,
+    get_sunrise_sunset_lst,
+    get_sunrise_sunset_lst_astroplan,
+    parse_observation_mode,
+    fits_constraints,
+    get_schedulable_candidates,
+    select_best_candidate,
+    update_observation_duration,
+    schedule_day,
+)
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
 import astropy.time 
@@ -116,8 +130,63 @@ class TestGetSchedulableCandidates(unittest.TestCase):
         m.return_value=True; df_pass=self._create_df([{'id':'S1','simulated_duration':2.0}]); self.assertEqual(get_schedulable_candidates(df_pass,**self.p),[(0,2.0)]); m.assert_called_once(); m.reset_mock()
         df_short=self._create_df([{'id':'S1','simulated_duration':0.4}]); self.assertEqual(get_schedulable_candidates(df_short,**self.p),[]); m.assert_not_called() 
 
-class TestSelectBestCandidate(unittest.TestCase): 
-    def test_selection(self): self.assertEqual(select_best_candidate([('S1',2.0)]),('S1',2.0)); self.assertEqual(select_best_candidate([('S1',2.0),('S2',3.5),('S3',1.5)]),('S2',3.5)); self.assertEqual(select_best_candidate([('SA',4.0),('SB',2.5),('SC',4.0)]),('SA',4.0))
+class TestSelectBestCandidate(unittest.TestCase):
+    def setUp(self):
+        self.unscheduled = pd.DataFrame({
+            'id': ['S1', 'S2', 'S3'],
+            'simulated_duration': [2.0, 3.5, 1.5],
+            'instrument_band': ['L', 'L', 'L'],
+            'night_obs': ['No', 'No', 'No'],
+            'avoid_sunrise_sunset': ['No', 'No', 'No'],
+            'split_count': [0, 0, 0],
+            'product': ['', '', '']
+        })
+        self.prev_mode = None
+        self.current_dt = datetime(2024, 1, 1)
+
+    def test_selection_duration_tiebreak(self):
+        cands = [(0, 2.0), (1, 3.5), (2, 1.5)]
+        idx, dur = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
+        self.assertEqual((idx, dur), (1, 3.5))
+
+    def test_prefers_constraints(self):
+        self.unscheduled.loc[0, 'night_obs'] = 'Yes'
+        cands = [(0, 2.0), (1, 3.5)]
+        idx, _ = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
+        self.assertEqual(idx, 0)
+
+    def test_split_penalty(self):
+        self.unscheduled.loc[0, 'split_count'] = 2
+        cands = [(0, 2.0), (1, 2.0)]
+        idx, _ = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
+        self.assertEqual(idx, 1)
+
+    def test_mode_continuity(self):
+        self.prev_mode = ('l', '32k', '')
+        self.unscheduled.loc[0, 'product'] = 'c856M32k'
+        self.unscheduled.loc[1, 'instrument_band'] = 'UHF'
+        cands = [(0, 2.0), (1, 3.5)]
+        idx, _ = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
+        self.assertEqual(idx, 0)
+
+    def test_cadence_preference(self):
+        self.unscheduled['cadence_days'] = [30.0, 30.0, 30.0]
+        self.unscheduled['last_observed'] = [60000.0, 59950.0, 60000.0]
+        self.current_dt = Time(60030.0, format='mjd').to_datetime()
+        cands = [(0, 1.0), (1, 1.0)]
+        idx, _ = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
+        self.assertEqual(idx, 0)
+
+    def test_cadence_zero_does_not_crash(self):
+        self.unscheduled['cadence_days'] = [0.0, 30.0, 30.0]
+        self.unscheduled['last_observed'] = [60000.0, 59950.0, 60000.0]
+        cands = [(0, 1.0), (1, 1.0)]
+        idx, _ = select_best_candidate(cands, self.unscheduled, self.prev_mode, self.current_dt)
+        self.assertIn(idx, [0, 1])
+
+    def test_parse_observation_mode_width_not_letter_based(self):
+        obs = pd.Series({'product': 'c856M32k', 'instrument_band': 'L'})
+        self.assertEqual(parse_observation_mode(obs), ('l', '32k', ''))
 
 class TestUpdateObservationDuration(unittest.TestCase):
     def test_updates(self): 
@@ -165,14 +234,14 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         elif 'id' not in df.columns and not df.empty : df['id'] = [f'SB_TEST_{i}' for i in range(len(df))]
         return df
 
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_no_obs_empty_df(self, m_gss, m_args):
         m_args.avoid_weds=False; m_gss.return_value=(6.0,18.0)
         df_empty = self._create_test_df([])
         s,d=schedule_day(df_empty,self.day,self.sdt,self.st,self.min_od,self.ulh)
         self.assertEqual(s,[]); self.assertEqual(d,0.0); self.assertTrue(np.all(self.ulh==0))
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_no_obs_fit_slots(self, m_gss, m_args): 
         m_args.avoid_weds=False; m_gss.return_value=(0.1,0.2)
         df=self._create_test_df([{'id':'SB_TIGHT','lst_start':10.0,'lst_start_end':10.4,'simulated_duration':0.5}])
@@ -182,7 +251,7 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         self.assertEqual(len(s),2, f"SB_TIGHT should be scheduled. Got {s}")
         self.assertAlmostEqual(d_sched, 0.5)
 
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_simple_scheduling_one_obs(self, m_gss, m_args): # SB101
         m_args.avoid_weds=False; m_gss.return_value=(23.9,23.99)
         df=self.udf[self.udf['id']=='SB101'].copy().reset_index(drop=True)
@@ -200,7 +269,7 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
                         # current_LST goes from 3.25 to 3.25 + 40*0.5 = 23.25. ulh[int(23.25)]=ulh[23] gets one 0.5. Correct.
         self.assertTrue(np.allclose(self.ulh,exp_ulh), f"ULH: Got {self.ulh}, Exp {exp_ulh}")
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_multiple_obs_scheduled(self, m_gss, m_args): # SB101, SB105
         m_args.avoid_weds=False; m_gss.return_value=(0.0,0.1)
         ids=['SB101','SB105']; df=self.udf[self.udf['id'].isin(ids)].copy().reset_index(drop=True)
@@ -211,7 +280,7 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         self.assertEqual(len(s),4); self.assertAlmostEqual(d_tot,d1+d5)
         self.assertEqual(s[1]['ID'],'SB101'); self.assertEqual(s[3]['ID'],'SB105')
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_obs_partially_scheduled_day_end(self, m_gss, m_args):
         m_args.avoid_weds=False; m_gss.return_value=(23.9,23.99)
         data=[{'id':'SB_VL','lst_start':0.0,'lst_start_end':23.99,'simulated_duration':30.0}]
@@ -224,13 +293,13 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         self.assertAlmostEqual(d_tot,exp_part); self.assertAlmostEqual(df_long.loc[0,'simulated_duration'],init_dur-exp_part)
         self.assertAlmostEqual(np.sum(self.ulh),0.0)
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_min_obs_dur_filter_schedule_day(self, m_gss, m_args):
         m_args.avoid_weds=False; m_gss.return_value=(0.1,0.2)
         data=[{'id':'SB_TS','simulated_duration':self.min_od-0.1,'lst_start':0.0,'lst_start_end':1.0}]
         df=self._create_test_df(data); s,_=schedule_day(df,self.day,self.sdt,self.st,self.min_od,self.ulh); self.assertEqual(len(s),0)
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_lst_wrap_schedule(self, m_gss, m_args): # SB102
         m_args.avoid_weds=False; m_gss.return_value=(5.0,18.0) 
         df=self.udf[self.udf['id']=='SB102'].copy().reset_index(drop=True) 
@@ -240,7 +309,7 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         self.assertEqual(len(s),2); self.assertEqual(s[1]['ID'],'SB102'); self.assertAlmostEqual(d,sb102_dur)
         self.assertAlmostEqual(s[0]['Observation_Start_LST'],0.0) 
     
-    @patch('mk_sched.get_sunrise_sunset_lst')
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
     def test_night_obs_constraint_integration(self, m_gss, m_args):
         m_args.avoid_weds=False; m_gss.return_value=(0.1,0.2) 
         df_fail=self.udf[self.udf['id']=='SB103'].copy().reset_index(drop=True) 
@@ -251,6 +320,24 @@ SB110,PROP5,Daytime No Sun Constraint,09:00,17:00,28800,L,No,No
         self.ulh=np.zeros(24); s_p,d_p=schedule_day(df_pass,self.day,self.sdt,self.st,self.min_od,self.ulh)
         self.assertEqual(len(s_p),2); self.assertAlmostEqual(d_p,1.0)
     
+    @patch('mk_sched.get_sunrise_sunset_lst_astroplan')
+    def test_sun_avoid_integration(self, m_gss, m_args): 
+        m_args.avoid_weds=False
+        df_orig=self.udf[self.udf['id']=='SB106'].copy().reset_index(drop=True) 
+        if df_orig.empty: self.skipTest("SB106 missing")
+        
+        sr_conflict,ss_far = 10.0,18.0; m_gss.return_value=(sr_conflict,ss_far) 
+        self.ulh=np.zeros(24); df_c = df_orig.copy()
+        s1,d1=schedule_day(df_c,self.day,self.sdt,self.st,self.min_od,self.ulh)
+        if len(s1) > 0: 
+            self.assertEqual(s1[1]['ID'], 'SB106')
+            obs_slot_start_lst = s1[1]['Observation_Start_LST'] 
+            self.assertTrue(obs_slot_start_lst >= sr_conflict, f"SB106 slot {obs_slot_start_lst} should start at/after SR {sr_conflict}")
+        
+        m_gss.return_value=(0.1,0.2); self.ulh=np.zeros(24) 
+        s2,d2=schedule_day(df_orig.copy(),self.day,self.sdt,self.st,self.min_od,self.ulh)
+        self.assertEqual(len(s2),2); self.assertAlmostEqual(d2,4.0); self.assertEqual(s2[1]['ID'],'SB106')
+        if len(s2)==2: self.assertAlmostEqual(s2[0]['Observation_Start_LST'], 8.0)
 
 if __name__ == '__main__':
     unittest.main()

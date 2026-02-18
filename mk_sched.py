@@ -3,6 +3,7 @@ import astropy.units as u
 import numpy as np
 import logging
 import pandas as pd
+import re
 
 from astroplan import Observer
 from astropy.time import Time
@@ -108,6 +109,8 @@ def fits_constraints(obs, start_time, duration, sunrise, sunset, start_datetime=
 
 def schedule_observations(unscheduled_df, max_days, min_obs_duration, setup_time):
     unscheduled = unscheduled_df.copy()
+    if 'split_count' not in unscheduled.columns:
+        unscheduled['split_count'] = 0
     scheduled_observations = []
     script_start_datetime = next_lst_zero(location=meerkat_location).to_datetime()
     
@@ -148,14 +151,18 @@ def schedule_observations(unscheduled_df, max_days, min_obs_duration, setup_time
     return scheduled_observations
 
 def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_duration, unscheduled_LST_hours):
+    if 'split_count' not in unscheduled.columns:
+        unscheduled['split_count'] = 0
+
     current_LST = 0.0
     daily_schedule = []
     daily_scheduled_duration = 0
     daily_time_remaining = 24
     scheduled_today = set()
-    
+    prev_mode = None
+
     sunrise, sunset = get_sunrise_sunset_lst_astroplan(script_start_datetime + timedelta(days=day - 1))
-    
+
     while daily_time_remaining > setup_time and not unscheduled.empty:
         candidates = get_schedulable_candidates(
             unscheduled,
@@ -174,25 +181,32 @@ def schedule_day(unscheduled, day, script_start_datetime, setup_time, min_obs_du
             current_LST = (current_LST + 0.5) % 24
             daily_time_remaining -= 0.5
             continue
-        
-        idx, duration_to_schedule = select_best_candidate(candidates)
+
+        obs_start_dt = script_start_datetime + timedelta(days=(day - 1), hours=(current_LST + setup_time))
+        idx, duration_to_schedule = select_best_candidate(candidates, unscheduled, prev_mode, obs_start_dt)
         obs = unscheduled.loc[idx]
-        
+
         append_observation_to_schedule(
             daily_schedule, obs, day, current_LST, setup_time, duration_to_schedule, script_start_datetime
         )
 
+        remaining_before = unscheduled.loc[idx, 'simulated_duration']
         update_observation_duration(unscheduled, idx, duration_to_schedule)
-        
+
+        if duration_to_schedule < remaining_before:
+            unscheduled.at[idx, 'split_count'] += 1
+
+        prev_mode = parse_observation_mode(obs)
+
         current_LST = (current_LST + setup_time + duration_to_schedule) % 24
         daily_time_remaining -= (setup_time + duration_to_schedule)
         daily_scheduled_duration += duration_to_schedule
-        
+
         if unscheduled.at[idx, 'simulated_duration'] <= 0:
             scheduled_today.add(idx)
-    
+
     unscheduled = unscheduled.drop(list(scheduled_today)).copy()
-    
+
     return daily_schedule, daily_scheduled_duration
 
 # Constraint checking logic
@@ -209,9 +223,66 @@ def get_schedulable_candidates(unscheduled, current_LST, daily_time_remaining, s
             candidates.append((idx, duration_possible))
     return candidates
 
-def select_best_candidate(candidates):
-    # Prioritize candidate with maximum telescope utilization
-    return max(candidates, key=lambda x: x[1])
+def parse_observation_mode(obs):
+    product = str(obs.get('product', '')).lower()
+    band = str(obs.get('instrument_band', '')).lower()
+    if '32k' in product:
+        channels = '32k'
+    elif '4k' in product:
+        channels = '4k'
+    else:
+        channels = ''
+    if 'narrow' in product or re.search(r'(^|[^a-z])n([^a-z]|$)', product):
+        width = 'narrow'
+    elif 'wide' in product or re.search(r'(^|[^a-z])w([^a-z]|$)', product):
+        width = 'wide'
+    else:
+        width = ''
+    return band, channels, width
+
+
+def calculate_observation_score(obs, duration, split_count, prev_mode, current_datetime):
+    score = 0.0
+
+    future_splits = split_count + (duration < obs['simulated_duration'])
+    score -= future_splits
+
+    constraints = 0
+    if obs.get('night_obs') == 'Yes':
+        constraints += 1
+    if obs.get('avoid_sunrise_sunset') == 'Yes':
+        constraints += 1
+    score += constraints
+
+    current_mode = parse_observation_mode(obs)
+    if prev_mode is not None and current_mode == prev_mode:
+        score += 1
+
+    if (
+        'cadence_days' in obs
+        and 'last_observed' in obs
+        and not pd.isna(obs['cadence_days'])
+        and not pd.isna(obs['last_observed'])
+        and obs['cadence_days'] > 0
+    ):
+        current_mjd = Time(current_datetime).mjd
+        next_due = obs['last_observed'] + obs['cadence_days']
+        diff = abs(current_mjd - next_due)
+        if diff < obs['cadence_days']:
+            score += (obs['cadence_days'] - diff) / obs['cadence_days']
+
+    return score
+
+
+def select_best_candidate(candidates, unscheduled, prev_mode, current_datetime):
+    def candidate_key(item):
+        idx, duration = item
+        obs = unscheduled.loc[idx]
+        split_count = obs.get('split_count', 0)
+        score = calculate_observation_score(obs, duration, split_count, prev_mode, current_datetime)
+        return (score, duration)
+
+    return max(candidates, key=candidate_key)
 
 def append_observation_to_schedule(schedule, obs, day, current_LST, setup_time, duration, script_start_datetime):
     captureblock_datetime = script_start_datetime + timedelta(days=(day - 1), hours=current_LST)
