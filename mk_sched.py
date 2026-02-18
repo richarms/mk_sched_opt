@@ -24,6 +24,10 @@ parser.add_argument('-s', '--setup_time', type=float, default=0.25, help='Setup 
 parser.add_argument('-o', '--outfile', type=str, default='schedules/MeerKAT_Schedule.csv', help='Output filename')
 parser.add_argument('-w', '--avoid_weds', type=bool, default=True)
 parser.add_argument('-i', '--infile', type=str,  default='data/Observations 2025 - 2025.observations.csv')
+parser.add_argument('--progress_every', type=int, default=20, help='Emit progress message every N days (default 20)')
+verbosity_group = parser.add_mutually_exclusive_group()
+verbosity_group.add_argument('--quiet', action='store_true', help='Only log warnings/errors and final summary')
+verbosity_group.add_argument('--verbose', action='store_true', help='Enable debug-level logging')
 
 # MeerKAT location
 meerkat_location = EarthLocation(lat=-30.7130*u.deg, lon=21.4430*u.deg, height=1038*u.m)

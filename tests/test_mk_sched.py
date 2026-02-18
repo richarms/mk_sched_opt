@@ -14,7 +14,7 @@ from mk_sched import (
     schedule_day,
 )
 from unittest.mock import patch, MagicMock
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import astropy.time 
 from astropy.time import Time
 from astropy.coordinates import Angle, EarthLocation
@@ -39,7 +39,7 @@ class TestNextLSTZero(unittest.TestCase):
     @patch('mk_sched.datetime')
     @patch('mk_sched.Time')
     def test_current_lst_6h(self, MockTime, MockDatetime):
-        mock_utcnow_dt=datetime(2023,1,1,10,0,0); MockDatetime.utcnow.return_value=mock_utcnow_dt
+        mock_utcnow_dt=datetime(2023,1,1,10,0,0); MockDatetime.now.return_value=mock_utcnow_dt
         OT=astropy.time.Time
         def ts(*a,**k):
             if len(a)>0 and a[0]==mock_utcnow_dt: i=OT(mock_utcnow_dt,format='datetime',scale='utc'); i.sidereal_time=MagicMock(return_value=Angle(6*u.hourangle)); return i
@@ -50,7 +50,7 @@ class TestNextLSTZero(unittest.TestCase):
     @patch('mk_sched.datetime')
     @patch('mk_sched.Time')
     def test_current_lst_near_24h(self, MockTime, MockDatetime):
-        mock_utcnow_dt=datetime(2023,1,2,12,0,0); MockDatetime.utcnow.return_value=mock_utcnow_dt
+        mock_utcnow_dt=datetime(2023,1,2,12,0,0); MockDatetime.now.return_value=mock_utcnow_dt
         OT=astropy.time.Time
         def ts(*a,**k):
             if len(a)>0 and a[0]==mock_utcnow_dt: i=OT(mock_utcnow_dt,format='datetime',scale='utc'); i.sidereal_time=MagicMock(return_value=Angle(23.9*u.hourangle)); return i
@@ -61,7 +61,7 @@ class TestNextLSTZero(unittest.TestCase):
     @patch('mk_sched.datetime')
     @patch('mk_sched.Time')
     def test_current_lst_past_0h(self, MockTime, MockDatetime):
-        mock_utcnow_dt=datetime(2023,1,3,18,0,0); MockDatetime.utcnow.return_value=mock_utcnow_dt
+        mock_utcnow_dt=datetime(2023,1,3,18,0,0); MockDatetime.now.return_value=mock_utcnow_dt
         OT=astropy.time.Time
         def ts(*a,**k):
             if len(a)>0 and a[0]==mock_utcnow_dt: i=OT(mock_utcnow_dt,format='datetime',scale='utc'); i.sidereal_time=MagicMock(return_value=Angle(0.1*u.hourangle)); return i
